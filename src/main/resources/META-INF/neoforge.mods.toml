@@ -10,6 +10,9 @@ displayName = "mcMMO"
 description = "mcMMO reborn as a singleplayer NeoForge mod: RPG skills, leveling, and active abilities for vanilla Minecraft."
 authors = "nossr50, mcMMO contributors"
 
+[[mixins]]
+config = "mcmmo.mixins.json"
+
 [[dependencies.mcmmo]]
     modId = "neoforge"
     type = "required"
