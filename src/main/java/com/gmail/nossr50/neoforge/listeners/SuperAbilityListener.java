@@ -384,7 +384,7 @@ public final class SuperAbilityListener {
         // wolf, cod for a cat, an apple for a horse) summons the pet. Legacy fired this from the
         // LEFT_CLICK arm of PlayerInteractEvent gated on isSneaking(). Returning (cancelled) consumes
         // the click so it doesn't also begin breaking the block.
-        if (serverPlayer.isCrouching()
+        if (serverPlayer.isShiftKeyDown()
                 && McMMOMod.getCallOfTheWild().isCOTWItem(itemPath(held))) {
             CallOfTheWildHandler.processCallOfTheWild(mmoPlayer, serverPlayer);
             event.setCanceled(true);
@@ -691,7 +691,8 @@ public final class SuperAbilityListener {
         if (config == null || !config.getOffhandBlocksReadying()) {
             return false;
         }
-        return !player.getOffhandItem().isEmpty() && !player.isPassenger() && !player.isCrouching();
+        return !player.getOffhandItem().isEmpty() && !player.isPassenger()
+                && !player.isShiftKeyDown();
     }
 
     /**

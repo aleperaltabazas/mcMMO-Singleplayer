@@ -43,9 +43,20 @@ import org.jetbrains.annotations.NotNull;
  * the numeric decisions live on the MC-free {@link WoodcuttingManager}/{@link TreeFellerTraversal},
  * this class owns the vanilla world/item mutation.
  *
- * <p>The <b>starting</b> block is intentionally not felled here — vanilla already broke and dropped
- * it (this runs from {@code PlayerBlockBreakEvents.AFTER}), matching legacy where the triggering
- * break is handled by the normal path and {@code processTree} only walks the neighbours.
+ * <p>The <b>starting</b> block is intentionally not felled here — {@code BlockBreakListener} already
+ * awarded its XP/drops through the normal single-block path, so {@code process} only walks (and
+ * fells) its neighbours, matching legacy where the triggering break is handled by the normal path
+ * and {@code processTree} only walks the neighbours.
+ *
+ * <p>PORT (neoforge branch): under Fabric this fell out for free — {@code process} ran from
+ * {@code PlayerBlockBreakEvents.AFTER}, by which point the starting block was already gone, so the
+ * traversal's classifier read air there and never re-discovered it. NeoForge's single
+ * {@code BlockEvent.BreakEvent} runs Tree Feller <em>before</em> the block is actually removed (see
+ * {@code neoforge.listeners.BlockBreakListener}'s decisions.md entry on the BEFORE/AFTER collapse),
+ * so the origin still reads as a live log at traversal time and would otherwise be re-discovered and
+ * re-felled — double-paying its XP/drops on top of what the normal path already awarded. {@link
+ * #classify} now excludes {@code startPos} explicitly (not by relying on it reading as air) to keep
+ * this invariant true regardless of when the block is actually removed.
  *
  * <p>PORT (deferred, breadcrumbs):
  * <ul>
@@ -63,8 +74,10 @@ public final class TreeFellerProcessor {
      * Fell the tree around a block broken with Tree Feller active.
      *
      * @param world the server world the tree is in
-     * @param startPos the block the player broke to trigger the ability (already gone; the search
-     *     runs over its neighbours)
+     * @param startPos the block the player broke to trigger the ability — already rewarded by the
+     *     normal single-block path; explicitly excluded from the traversal by {@link #classify} so
+     *     it is never re-discovered and re-felled, regardless of whether it has actually been
+     *     removed from the live world yet by the time this runs (see the class javadoc's PORT note)
      * @param breaker the felling player (loot/durability context)
      * @param mmoPlayer the breaker's mcMMO data
      */
@@ -78,7 +91,7 @@ public final class TreeFellerProcessor {
         final List<FelledBlock> felled = TreeFellerTraversal.collect(
                 startPos.getX(), startPos.getY(), startPos.getZ(),
                 woodcutting.getTreeFellerThreshold(),
-                (x, y, z) -> classify(world, x, y, z));
+                (x, y, z) -> classify(world, startPos, x, y, z));
         if (felled.isEmpty()) {
             return;
         }
@@ -96,9 +109,21 @@ public final class TreeFellerProcessor {
         dropFelledBlocks(world, breaker, mmoPlayer, woodcutting, axe, felled);
     }
 
-    /** Classify the live block at a coordinate for the traversal (LOG / LEAF / OTHER). */
-    private static @NotNull TreeBlockType classify(@NotNull ServerLevel world, int x, int y, int z) {
+    /**
+     * Classify the live block at a coordinate for the traversal (LOG / LEAF / OTHER).
+     *
+     * <p>{@code startPos} always classifies {@code OTHER} here, never read from the live world — see
+     * the class javadoc's PORT note. Under NeoForge's collapsed break-event handler the origin block
+     * is still standing (not yet air) when this runs, so relying on a live read to exclude it would
+     * let the traversal re-discover and re-fell the block {@code BlockBreakListener} already
+     * rewarded, double-paying its XP/drops.
+     */
+    private static @NotNull TreeBlockType classify(@NotNull ServerLevel world,
+            @NotNull BlockPos startPos, int x, int y, int z) {
         final BlockPos pos = new BlockPos(x, y, z);
+        if (pos.equals(startPos)) {
+            return TreeBlockType.OTHER;
+        }
         // §A: a hand-placed log/leaf is excluded from the fell entirely — legacy
         // processTreeFellerTargetBlock returns false for an ineligible block, so it is never added to
         // the removal set (neither felled nor rewarded) and does not act as a search center.

@@ -400,7 +400,7 @@ public final class BlockBreakListener {
     private static void maybeProcessGreenThumbReplant(McMMOPlayer mmoPlayer,
             HerbalismManager herbalism, ServerLevel world, BlockPos pos, BlockState state,
             ServerPlayer breaker, String blockId, boolean mature) {
-        if (breaker.isCrouching()) {
+        if (breaker.isShiftKeyDown()) {
             return; // legacy: sneaking suppresses Green Thumb replant.
         }
         final String materialConfigString = ConfigStringUtils.getMaterialConfigString(blockId);
