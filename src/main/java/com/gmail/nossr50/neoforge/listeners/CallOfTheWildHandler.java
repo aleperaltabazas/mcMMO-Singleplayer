@@ -1,0 +1,220 @@
+package com.gmail.nossr50.neoforge.listeners;
+
+import com.gmail.nossr50.datatypes.player.McMMOPlayer;
+import com.gmail.nossr50.datatypes.skills.subskills.taming.CallOfTheWildType;
+import com.gmail.nossr50.datatypes.skills.subskills.taming.TamingSummon;
+import com.gmail.nossr50.neoforge.CotwSummon;
+import com.gmail.nossr50.neoforge.McMMOMod;
+import com.gmail.nossr50.locale.LocaleLoader;
+import com.gmail.nossr50.skills.taming.TamingManager;
+import com.gmail.nossr50.util.TransientEntityTracker;
+import com.gmail.nossr50.util.player.NotificationManager;
+import com.gmail.nossr50.platform.PlatformLivingEntity;
+import com.gmail.nossr50.platform.ParticleEffectUtils;
+import com.gmail.nossr50.util.sounds.SoundManager;
+import com.gmail.nossr50.util.sounds.SoundType;
+import com.gmail.nossr50.platform.text.TextUtils;
+import java.util.List;
+import java.util.Optional;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.DifficultyInstance;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.MobSpawnType;
+import net.minecraft.world.entity.SpawnGroupData;
+import net.minecraft.world.entity.TamableAnimal;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.animal.Cat;
+import net.minecraft.world.entity.animal.Wolf;
+import net.minecraft.world.entity.animal.horse.AbstractHorse;
+import net.minecraft.world.entity.animal.horse.Horse;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+
+/**
+ * The MC-typed Call-of-the-Wild glue: spawning the summoned animals and the {@code attackTarget}
+ * ("sic your wolves") sweep. Ports the entity-touching half of legacy {@code TamingManager}
+ * ({@code processCallOfTheWild} / {@code spawnCOTWEntity} / {@code spawnWolf}/{@code spawnCat}/
+ * {@code spawnHorse} / {@code attackTarget}); the server-free decisions live on
+ * {@link TamingManager} (the rank/permission gate + the anti-autofire debounce) and the
+ * {@link com.gmail.nossr50.skills.taming.CallOfTheWild} lookup tables, so this class owns only the
+ * inventory read, the entity construction and the tracker interaction.
+ *
+ * <p>Wolves and cats are {@link TamableAnimal} ({@code tame(Player)}); horses are
+ * {@link AbstractHorse} ({@code setTamed} + {@code setOwnerUUID}) — legacy's single Bukkit
+ * {@code Tameable#setOwner} splits across the two class hierarchies here. Every summon is spawned via
+ * {@link Mob#finalizeSpawn} first (the only public way to randomise a horse's colour/markings, whose
+ * setters are private) and then made adult, tamed, persistent, named and health-set, matching legacy's
+ * per-type spawn methods. Cats are <em>not</em> variant-randomised beyond {@code finalizeSpawn}: legacy
+ * only randomised the deprecated {@code Ocelot} type, never the modern cat.
+ *
+ * <p>PORT: out of Task 5's brief file list (Taming isn't in Phase 1's named scope) but ported here
+ * anyway, mechanically, as a load-bearing dependency of {@code SuperAbilityListener.onAttackBlock}'s
+ * sneaking-left-click-with-summoning-item branch — see {@code .agent/memory/decisions.md}, "Two
+ * fabric-package dependencies of the ported listeners".
+ */
+public final class CallOfTheWildHandler {
+
+    private CallOfTheWildHandler() {
+    }
+
+    /**
+     * Legacy {@code TamingManager#processCallOfTheWild}: if the player is holding enough of a COTW item,
+     * summon the animals (up to the per-type cap), pay the item cost, and notify. The trigger
+     * ({@code SuperAbilityListener}) has already confirmed a sneaking left-click; the gate + debounce
+     * are checked here so every entry path shares them.
+     */
+    public static void processCallOfTheWild(McMMOPlayer mmoPlayer, ServerPlayer player) {
+        final TamingManager taming = mmoPlayer.getTamingManager();
+        if (!taming.canCallOfTheWild() || !taming.summonDebounceElapsed()) {
+            return;
+        }
+
+        final ItemStack inHand = player.getMainHandItem();
+        final String itemId = BuiltInRegistries.ITEM.getKey(inHand.getItem()).getPath();
+        final Optional<TamingSummon> maybeSummon = McMMOMod.getCallOfTheWild().summonForItem(itemId);
+        if (maybeSummon.isEmpty()) {
+            return; // not a summoning item.
+        }
+
+        final TamingSummon summon = maybeSummon.get();
+        final CallOfTheWildType type = summon.getCallOfTheWildType();
+
+        if (inHand.getCount() < summon.getItemAmountRequired()) {
+            final int difference = summon.getItemAmountRequired() - inHand.getCount();
+            NotificationManager.sendPlayerInformationChatOnly(mmoPlayer,
+                    "Taming.Summon.COTW.NeedMoreItems", String.valueOf(difference),
+                    inHand.getHoverName().getString());
+            return;
+        }
+
+        final TransientEntityTracker tracker = McMMOMod.getTransientEntityTracker();
+        Vec3 spawnPos = player.position().add(1.0, 0.0, 1.0);
+        int amountSummoned = 0;
+
+        for (int i = 0; i < summon.getEntitiesSummoned(); i++) {
+            if (tracker.countActiveOfType(player.getUUID(), type) >= summon.getSummonCap()) {
+                NotificationManager.sendPlayerInformationChatOnly(mmoPlayer,
+                        "Taming.Summon.COTW.Limit", String.valueOf(summon.getSummonCap()),
+                        type.getDisplayName());
+                break;
+            }
+
+            spawnPos = spawnPos.add(1.0, 0.0, 0.0);
+            spawnSummon(player, type, summon, spawnPos);
+
+            if (summon.getSummonLifespan() > 0) {
+                NotificationManager.sendPlayerInformationChatOnly(mmoPlayer,
+                        "Taming.Summon.COTW.Success.WithLifespan", type.getDisplayName(),
+                        String.valueOf(summon.getSummonLifespan()));
+            } else {
+                NotificationManager.sendPlayerInformationChatOnly(mmoPlayer,
+                        "Taming.Summon.COTW.Success.WithoutLifespan", type.getDisplayName());
+            }
+            SoundManager.sendSound(mmoPlayer.getPlayer(), SoundType.ABILITY_ACTIVATED_GENERIC);
+            amountSummoned++;
+        }
+
+        // Legacy pays the item cost once, only if at least one animal was actually summoned.
+        if (amountSummoned >= 1) {
+            inHand.shrink(summon.getItemAmountRequired());
+        }
+    }
+
+    private static void spawnSummon(ServerPlayer player, CallOfTheWildType type, TamingSummon summon,
+            Vec3 pos) {
+        final ServerLevel world = player.serverLevel();
+        final Mob entity = createEntity(type, world);
+
+        entity.moveTo(pos.x(), pos.y(), pos.z(), player.getYRot(), 0.0F);
+        // Natural randomisation (variant/markings/base attributes) — the only public path to vary a
+        // horse's look, its setters being private. Must precede our own stat overrides below.
+        final DifficultyInstance difficulty = world.getCurrentDifficultyAt(entity.blockPosition());
+        entity.finalizeSpawn(world, difficulty, MobSpawnType.EVENT, (SpawnGroupData) null);
+        entity.setBaby(false); // legacy setAdult()
+        applyOwnership(entity, player);
+        applyTypeStats(entity, type);
+        entity.setPersistenceRequired(); // legacy setRemoveWhenFarAway(false)
+        entity.setCustomName(TextUtils.toText(LocaleLoader.getString("Taming.Summon.Name.Format",
+                player.getName().getString(), type.getDisplayName())));
+
+        world.addFreshEntity(entity);
+        ParticleEffectUtils.playCallOfTheWildEffect(new PlatformLivingEntity(entity));
+
+        final CotwSummon tracked = new CotwSummon(entity, type, player.getUUID(),
+                McMMOMod.getTransientEntityTracker(), summon.getSummonLifespan());
+        McMMOMod.getTransientEntityTracker().addSummon(player.getUUID(), tracked);
+    }
+
+    private static Mob createEntity(CallOfTheWildType type, ServerLevel world) {
+        return switch (type) {
+            case WOLF -> new Wolf(EntityType.WOLF, world);
+            case CAT -> new Cat(EntityType.CAT, world);
+            case HORSE -> new Horse(EntityType.HORSE, world);
+        };
+    }
+
+    private static void applyOwnership(Mob entity, ServerPlayer player) {
+        if (entity instanceof TamableAnimal tameable) {
+            tameable.tame(player); // wolves + cats: sets tamed and owner together
+        } else if (entity instanceof AbstractHorse horse) {
+            horse.setTamed(true);
+            horse.setOwnerUUID(player.getUUID());
+        }
+    }
+
+    private static void applyTypeStats(Mob entity, CallOfTheWildType type) {
+        switch (type) {
+            case WOLF -> setMaxHealth(entity, 20.0);
+            case HORSE -> {
+                // Legacy: random 15..30 HP, and a jump strength clamped into the config band.
+                final double maxHealth = 15.0 + (entity.getRandom().nextDouble() * 15.0);
+                setMaxHealth(entity, maxHealth);
+                final double rolled = Math.min(entity.getRandom().nextDouble(),
+                        entity.getRandom().nextDouble()) * 2.0;
+                final double jump = Math.max(McMMOMod.getAdvancedConfig().getMinHorseJumpStrength(),
+                        Math.min(rolled, McMMOMod.getAdvancedConfig().getMaxHorseJumpStrength()));
+                final AttributeInstance jumpAttr = entity.getAttribute(Attributes.JUMP_STRENGTH);
+                if (jumpAttr != null) {
+                    jumpAttr.setBaseValue(jump);
+                }
+            }
+            case CAT -> {
+                // No stat override: legacy left the cat at its natural stats.
+            }
+        }
+        entity.setHealth(entity.getMaxHealth());
+    }
+
+    private static void setMaxHealth(LivingEntity entity, double maxHealth) {
+        final AttributeInstance attr = entity.getAttribute(Attributes.MAX_HEALTH);
+        if (attr != null) {
+            attr.setBaseValue(maxHealth);
+        }
+    }
+
+    /**
+     * Legacy {@code TamingManager#attackTarget}: on a combat hit, every nearby tamed, un-sitting wolf
+     * the player owns re-targets the entity they just struck. The own-pet guard stops a player siccing
+     * their pack on one of their own animals.
+     */
+    public static void attackTarget(ServerPlayer player, LivingEntity target) {
+        if (target instanceof TamableAnimal tameable && tameable.isOwnedBy(player)) {
+            return;
+        }
+
+        final AABB searchBox = player.getBoundingBox().inflate(5.0);
+        final List<Wolf> wolves = player.level().getEntitiesOfClass(Wolf.class, searchBox,
+                wolf -> true);
+        for (Wolf wolf : wolves) {
+            if (wolf.isTame() && wolf.isOwnedBy(player) && !wolf.isOrderedToSit()) {
+                wolf.setTarget(target);
+            }
+        }
+    }
+}

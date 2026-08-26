@@ -14,6 +14,8 @@ import com.gmail.nossr50.database.PlacedBlockStore;
 import com.gmail.nossr50.database.ProfileStore;
 import com.gmail.nossr50.event.EventBus;
 import com.gmail.nossr50.event.SimpleEventBus;
+import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
+import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.scheduler.TickScheduler;
 import com.gmail.nossr50.runnables.SaveTimerTask;
@@ -185,9 +187,12 @@ public final class McMMOMod {
         // Phase 11: pump the task scheduler once per server tick.
         NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post event) -> scheduler.tick());
 
-        // Listener/command registration (block-break XP, super abilities, commands, etc.) lands
-        // here as each subsystem's NeoForge wiring is ported in a later task; see
-        // fabric.McMMOMod#onInitialize for the full list this entry point will grow to match.
+        // Task 5: the block-break and activation pipeline (Mining + shared plumbing). Command
+        // registration and the remaining listeners land here as each subsystem's NeoForge wiring
+        // is ported in a later task; see fabric.McMMOMod#onInitialize for the full list this entry
+        // point will grow to match.
+        BlockBreakListener.register();
+        SuperAbilityListener.register();
     }
 
     /** Equivalent of {@code onEnable}: per-session init when a world's server starts. */
