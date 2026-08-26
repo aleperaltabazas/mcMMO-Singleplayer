@@ -1,0 +1,25 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "GPL-3.0-only"
+issueTrackerURL = "https://github.com/Wulfic/mcMMO-Singleplayer/issues"
+
+[[mods]]
+modId = "mcmmo"
+version = "${file.jarVersion}"
+displayName = "mcMMO"
+description = "mcMMO reborn as a singleplayer NeoForge mod: RPG skills, leveling, and active abilities for vanilla Minecraft."
+authors = "nossr50, mcMMO contributors"
+
+[[dependencies.mcmmo]]
+    modId = "neoforge"
+    type = "required"
+    versionRange = "[21.1,21.2)"
+    ordering = "NONE"
+    side = "BOTH"
+
+[[dependencies.mcmmo]]
+    modId = "minecraft"
+    type = "required"
+    versionRange = "[1.21.1,1.21.2)"
+    ordering = "NONE"
+    side = "BOTH"

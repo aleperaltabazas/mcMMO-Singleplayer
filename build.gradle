@@ -1,52 +1,9 @@
 plugins {
-    id 'fabric-loom' version '1.17.13'
+    id 'net.neoforged.moddev' version '2.0.91'
     id 'java'
 }
 
-// -----------------------------------------------------------------------------
-// Band label: what Minecraft versions this jar RUNS ON, stamped into its name.
-//
-// WHY THIS EXISTS. The jar used to be `mcmmo-2.2.050-build.28.jar` — no Minecraft version anywhere
-// in the filename. The MC version lived only in the git tag and inside fabric.mod.json, so every
-// upload needed a hand-rename to say what it was for, and the branches' jars differed only by a
-// `build.<N>` that is GITHUB_RUN_NUMBER: repo-global rather than per-branch, so identical mod code got
-// a different number on every branch. Numbers that look comparable and are not.
-//
-// A band covers a RANGE of versions with ONE jar (ruling R-a), so the label is a range, not a point:
-//     1 version   -> +mc1.21.5
-//     N versions  -> +mc1.21.6-1.21.8      (endpoints, both written out in full)
-//
-// Ordering note: this is SemVer build metadata, so it sorts after any `-SNAPSHOT` pre-release tag —
-// `2.2.050-SNAPSHOT+mc1.21.6-1.21.8` is correct, not accidental. Every form the five bands can
-// produce was checked against fabric-loader 0.19.3's own parser before this landed, and
-// BandVersionLabelTest keeps checking it.
-//
-// Resolved HERE, at configuration time, and captured into a local. Reading `project` from inside a
-// task's execution-time closure is what the configuration cache rejects — see the same scar on
-// processResources below.
-//
-// findProperty, not project.<name>: a bare dereference of a missing property throws
-// MissingPropertyException naming only the property, which is a confusing failure on a band branch
-// that took this logic in a cherry-pick without gradle.properties. Fail with the fix instead.
-def declaredBandVersions = project.findProperty('supported_minecraft_versions')
-if (declaredBandVersions == null) {
-    throw new GradleException(
-            'gradle.properties is missing supported_minecraft_versions. Every branch must declare the '
-                    + "Minecraft versions ITS OWN band's jar runs on, ascending and comma-separated "
-                    + '(e.g. supported_minecraft_versions=1.21.6,1.21.7,1.21.8). The value is per-band '
-                    + 'and must not be copied from another branch.')
-}
-def bandVersions = declaredBandVersions.toString().split(',')*.trim().findAll { it }
-if (bandVersions.isEmpty()) {
-    throw new GradleException(
-            'supported_minecraft_versions is empty in gradle.properties. It must list every Minecraft '
-                    + "version this band's jar runs on, ascending and comma-separated.")
-}
-def bandLabel = bandVersions.size() == 1
-        ? "mc${bandVersions.first()}"
-        : "mc${bandVersions.first()}-${bandVersions.last()}"
-
-version = "${project.mod_version}+${bandLabel}"
+version = project.mod_version
 group = project.maven_group
 
 base {
@@ -54,85 +11,48 @@ base {
 }
 
 repositories {
-    // Add repositories here as ported code needs them. Fabric/MC come from Loom.
     mavenCentral() // JUnit (and future plain-Java test/util deps)
+}
 
-    // Optional client-integration mods (ModMenu, Cloth Config). Dev classpath only — see below.
-    maven {
-        name = 'Terraformers'
-        url = 'https://maven.terraformersmc.com/releases/'
-    }
-    maven {
-        name = 'shedaniel'
-        url = 'https://maven.shedaniel.me/'
+// -----------------------------------------------------------------------------
+// Incremental migration note.
+//
+// This branch (neoforge/1.21.1) is being ported package-by-package from the Fabric/Loom
+// build on mc/1.21.1 per docs/superpowers/plans/2026-08-26-neoforge-port-phase1-plan.md.
+// `com/gmail/nossr50/fabric/**` still references net.fabricmc APIs (no longer on the
+// classpath under ModDevGradle) and `com/gmail/nossr50/platform/**` (plus everything under
+// skills/, datatypes/, util/, config/, runnables/, commands/, database/, locale/ that
+// transitively imports platform/) still references yarn-mapped `net.minecraft.*` names,
+// which NeoForge's official-mappings classpath does not have. Both are ported by later tasks
+// in that plan (Task 3 re-maps platform/, Task 8 deletes fabric/ once neoforge/ replaces it).
+// Until then, only the new `com.gmail.nossr50.neoforge` package is compiled, so this task's
+// walking-skeleton build is green without editing any of that legacy code. Widen (or remove)
+// this include filter as each later task finishes porting its package.
+// -----------------------------------------------------------------------------
+sourceSets {
+    main {
+        java {
+            include 'com/gmail/nossr50/neoforge/**'
+        }
     }
 }
 
+neoForge {
+    version = project.neo_version
+}
+
 dependencies {
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-
     // YAML config backend. mcMMO's configs are .yml (ported from Bukkit's YamlConfiguration);
-    // snakeyaml replaces that engine. `include` nests it in the built jar (Fabric Jar-in-Jar)
-    // so the mod ships it at runtime; `implementation` puts it on the compile/test classpath.
+    // snakeyaml replaces that engine.
     implementation "org.yaml:snakeyaml:${project.snakeyaml_version}"
-    include "org.yaml:snakeyaml:${project.snakeyaml_version}"
-
-    // Optional client integrations: ModMenu (in-game config screen entry) + Cloth Config (the
-    // editable options UI). Compile-only so the mod builds against their APIs, plus localRuntime so
-    // `./gradlew runClient` loads them for in-game verification. NEVER bundled (no `include`): they
-    // are the player's own choice to install. The `modmenu` entrypoint class is lazily loaded only
-    // by ModMenu, and Cloth classes are referenced only behind a FabricLoader.isModLoaded("cloth-
-    // config") guard, so the mod runs cleanly when either/both are absent.
-    modCompileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
-    modLocalRuntime "com.terraformersmc:modmenu:${project.modmenu_version}"
-    modCompileOnly "me.shedaniel.cloth:cloth-config-fabric:${project.cloth_config_version}"
-    modLocalRuntime("me.shedaniel.cloth:cloth-config-fabric:${project.cloth_config_version}") {
-        // cloth-config-fabric declares ModMenu as an optional dep; avoid pulling a second copy.
-        exclude(group: 'net.fabricmc.fabric-api')
-    }
 
     // Unit tests for MC-free code (the platform/ + event/ + skill-manager + config layers).
     testImplementation platform("org.junit:junit-bom:${project.junit_version}")
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
-    // Fabric Loader JUnit: runs the test task under Knot's classloader so Minecraft's access
-    // wideners apply and SharedConstants.createGameVersion()/Bootstrap.initialize() can populate
-    // the vanilla registries in a @BeforeAll. This is what makes the MC-typed glue that extracts a
-    // registry-id path from an ItemStack/Block (ItemUtils/BlockUtils over MaterialMapStore) unit-
-    // testable without an in-game client — plain JUnit fails with an IllegalAccessError because it
-    // loads MC classes off the app classloader with the access wideners un-applied. Versioned to
-    // the loader. See CONVERSION_TODO.md Phase 12.
-    testImplementation "net.fabricmc:fabric-loader-junit:${project.loader_version}"
-
-    // Mockito for MC-free unit tests that need to stand in for the platform/ adapters (final
-    // wrappers over net.minecraft types like ServerPlayerEntity, which can't be built without a
-    // running server). Mockito 5's default inline mock maker mocks final classes directly.
+    // Mockito for MC-free unit tests that need to stand in for the platform/ adapters.
     testImplementation "org.mockito:mockito-core:${project.mockito_version}"
-}
-
-// -----------------------------------------------------------------------------
-// Incremental migration note.
-//
-// The legacy Bukkit/Spigot plugin lives under legacy/ (NOT a Gradle source dir)
-// and is ported into src/main/java package-by-package per CONVERSION_TODO.md.
-// `git mv` each file from legacy/ into src/ as it's converted. Standard Loom
-// sourceSets apply here — no include filters.
-// -----------------------------------------------------------------------------
-
-processResources {
-    // Captured at CONFIGURATION time. Dereferencing `project` inside the filesMatching closure
-    // reads a Gradle script object at EXECUTION time, which the configuration cache rejects.
-    def modVersion = project.version
-    inputs.property 'version', modVersion
-    filesMatching('fabric.mod.json') {
-        expand version: modVersion
-    }
-    // Legacy Bukkit resource files (plugin.yml, locale/**, *.yml configs) are
-    // migrated in later phases; only fabric.mod.json + mixin configs matter now.
 }
 
 java {
@@ -152,53 +72,13 @@ tasks.withType(JavaCompile).configureEach {
 
 test {
     useJUnitPlatform()
-
-    // Hand BandVersionLabelTest the version this build ACTUALLY computed, so the guard cross-checks
-    // build.gradle's label logic instead of reimplementing it — a reimplementation would keep passing
-    // if the real rule above broke. Captured into locals: reading `project` from a task's
-    // execution-time closure is what the configuration cache rejects.
-    // ⚠️ mod_version is handed over SEPARATELY from gradle.properties' text, because the release path
-    // overrides it: release.yml builds with -Pmod_version=<base minus -SNAPSHOT>. A guard that rebuilt
-    // the expected string from the FILE therefore compared 2.2.050-SNAPSHOT+mc<band> against the
-    // 2.2.050+mc<band> the build really produced, and failed on the release path ONLY — green on every
-    // developer machine, red on all four bands' Build step, which is how it shipped to five branches
-    // and blocked every release from 2026-08-13. Compare against what Gradle resolved; check the
-    // file-vs-resolved relationship separately, where the override is a legal outcome.
-    def resolvedVersion = project.version.toString()
-    def resolvedBandVersions = bandVersions.join(',')
-    def resolvedModVersion = project.mod_version.toString()
-    systemProperty 'mcmmo.build.version', resolvedVersion
-    systemProperty 'mcmmo.build.bandVersions', resolvedBandVersions
-    systemProperty 'mcmmo.build.modVersion', resolvedModVersion
-    inputs.property 'mcmmo.build.version', resolvedVersion
-
-    // ⚠️⚠️ A FILE A GUARD TEST READS MUST BE DECLARED AS A TASK INPUT, or Gradle does not know the
-    // test depends on it — and with org.gradle.caching=true it serves a CACHED PASS after that file
-    // changes. BandVersionLabelTest asserts release.yml still refuses a stale mod_version; measured
-    // 2026-08-18, three mutations of that workflow (deleting the refusal step, moving it below the
-    // tag push, turning its exit 1 into exit 0) ALL scored "not caught" — not because the assertions
-    // were wrong, but because :test never re-ran. A guard that cannot re-run is decoration.
-    //
-    // gradle.properties needs no entry here: mcmmo.build.version above already changes with it.
-    // fabric.mod.json rides in on processResources' output, which is already a test input.
-    inputs.file(rootProject.file('.github/workflows/release.yml'))
-            .withPropertyName('releaseWorkflow')
-
-    // The fabric-loader-junit tests call McTestRegistries.bootstrap() -> Bootstrap.initialize(),
-    // which builds the whole vanilla registry set. Measured 2026-08-05: that @BeforeAll costs ~53s
-    // and is CPU-bound, not GC-bound (512m and 3g time identically), so it is a fixed per-JVM cost.
-    // The only way to beat it is to overlap it with real work in sibling JVMs.
-    //
-    // Forked PROCESSES, not JUnit in-JVM threads: mcMMO's main code is full of static singletons
-    // (RankUtils is a plain HashMap, the config/mcMMO.p statics likewise), so sharing one JVM
-    // across test threads would race. A process fork isolates them for free.
     maxParallelForks = 4
     maxHeapSize = '1g'
 }
 
 jar {
-    // Same configuration-cache rule as processResources: resolve the name up front, not in the
-    // rename closure, which runs at execution time.
+    // Same configuration-cache-friendly pattern the Fabric build used: resolve the name up
+    // front, not inside the rename closure, which runs at execution time.
     def archiveName = project.base.archivesName.get()
     from('LICENSE') {
         rename { "${it}_${archiveName}" }
