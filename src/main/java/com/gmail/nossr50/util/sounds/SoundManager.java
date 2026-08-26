@@ -1,7 +1,7 @@
 package com.gmail.nossr50.util.sounds;
 
 import com.gmail.nossr50.config.SoundConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import java.util.concurrent.ThreadLocalRandom;
 import com.gmail.nossr50.platform.PlatformSoundCategory;

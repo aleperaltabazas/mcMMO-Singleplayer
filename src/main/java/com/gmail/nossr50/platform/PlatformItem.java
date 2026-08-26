@@ -1,15 +1,15 @@
 package com.gmail.nossr50.platform;
 
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.ItemEnchantmentsComponent;
-import net.minecraft.enchantment.Enchantment;
-import net.minecraft.enchantment.Enchantments;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryKey;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.util.Identifier;
+import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.item.enchantment.ItemEnchantments;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -21,7 +21,7 @@ import org.jetbrains.annotations.NotNull;
  * Bukkit {@code ItemMeta} ({@code get/setItemMeta}, 36+16 refs) -> 1.21 DataComponents for
  * display name / lore; and enchantment access ({@code getEnchantmentLevel},
  * {@code add/removeEnchantment}) which in 1.21 needs the dynamic enchantment registry
- * ({@code world.getRegistryManager()} -> {@code RegistryEntry<Enchantment>}), not a static enum.
+ * ({@code world.getRegistryManager()} -> {@code Holder<Enchantment>}), not a static enum.
  * Those get their own adapter once a consumer (a repair/salvage skill) is ported to validate
  * the shape. Use {@link #unwrap()} meanwhile.
  *
@@ -51,13 +51,13 @@ public final class PlatformItem {
     }
 
     /** Registry id of the item, e.g. {@code minecraft:diamond_pickaxe}. */
-    public @NotNull Identifier getTypeId() {
-        return Registries.ITEM.getId(handle.getItem());
+    public @NotNull ResourceLocation getTypeId() {
+        return BuiltInRegistries.ITEM.getKey(handle.getItem());
     }
 
     /**
      * Registry <em>path</em> of the item, e.g. {@code diamond_pickaxe} — the key the MC-free
-     * repair/salvage tables are built on, so callers can look a stack up without an {@link Identifier}.
+     * repair/salvage tables are built on, so callers can look a stack up without an {@link ResourceLocation}.
      */
     public @NotNull String getTypePath() {
         return getTypeId().getPath();
@@ -74,26 +74,26 @@ public final class PlatformItem {
     }
 
     public int getMaxAmount() {
-        return handle.getMaxCount();
+        return handle.getMaxStackSize();
     }
 
     /** Remove {@code amount} items from this stack, in place (vanilla {@code decrement}). */
     public void decrement(int amount) {
-        handle.decrement(amount);
+        handle.shrink(amount);
     }
 
     // --- Durability (Bukkit durability == vanilla damage) -------------------
 
     public boolean isDamageable() {
-        return handle.isDamageable();
+        return handle.isDamageableItem();
     }
 
     public int getDurability() {
-        return handle.getDamage();
+        return handle.getDamageValue();
     }
 
     public void setDurability(int damage) {
-        handle.setDamage(damage);
+        handle.setDamageValue(damage);
     }
 
     public int getMaxDurability() {
@@ -108,7 +108,7 @@ public final class PlatformItem {
      * durability changes are a no-op on them.
      */
     public boolean isUnbreakable() {
-        return handle.contains(DataComponentTypes.UNBREAKABLE);
+        return handle.has(DataComponents.UNBREAKABLE);
     }
 
     /**
@@ -117,13 +117,13 @@ public final class PlatformItem {
      * and matching the {@link RegistryKey} — no registry-manager access is needed, so this is callable
      * without a world context.
      */
-    public int getEnchantmentLevel(@NotNull RegistryKey<Enchantment> enchantmentKey) {
-        if (!handle.hasEnchantments()) {
+    public int getEnchantmentLevel(@NotNull ResourceKey<Enchantment> enchantmentKey) {
+        if (!handle.isEnchanted()) {
             return 0;
         }
-        ItemEnchantmentsComponent enchantments = handle.getEnchantments();
-        for (RegistryEntry<Enchantment> entry : enchantments.getEnchantments()) {
-            if (entry.matchesKey(enchantmentKey)) {
+        ItemEnchantments enchantments = handle.getEnchantments();
+        for (Holder<Enchantment> entry : enchantments.keySet()) {
+            if (entry.is(enchantmentKey)) {
                 return enchantments.getLevel(entry);
             }
         }
@@ -142,7 +142,7 @@ public final class PlatformItem {
      * item type only, not components/meta — refine once the ItemMeta adapter lands.
      */
     public boolean isSimilar(@NotNull PlatformItem other) {
-        return ItemStack.areItemsEqual(handle, other.handle);
+        return ItemStack.isSameItem(handle, other.handle);
     }
 
     /**
@@ -152,12 +152,12 @@ public final class PlatformItem {
      * "sugar with a custom name" must not be conflated.
      */
     public boolean matchesItemAndComponents(@NotNull PlatformItem other) {
-        return ItemStack.areItemsAndComponentsEqual(handle, other.handle);
+        return ItemStack.isSameItemSameComponents(handle, other.handle);
     }
 
     /** Full equality including stack count (vanilla {@code ItemStack.areEqual}). */
     public boolean matchesExactly(@NotNull PlatformItem other) {
-        return ItemStack.areEqual(handle, other.handle);
+        return ItemStack.matches(handle, other.handle);
     }
 
     public @NotNull PlatformItem copy() {

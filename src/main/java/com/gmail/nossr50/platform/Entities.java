@@ -1,7 +1,7 @@
 package com.gmail.nossr50.platform;
 
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -30,12 +30,12 @@ public final class Entities {
      * raw id — showing the player {@code somemod:wraith} is honest; showing them "Pig" is a lie.
      */
     public static @NotNull String displayName(@NotNull String entityId) {
-        final Identifier id = Identifier.tryParse(entityId);
+        final ResourceLocation id = ResourceLocation.tryParse(entityId);
         if (id == null) {
             return entityId;
         }
-        return Registries.ENTITY_TYPE.getOrEmpty(id)
-                .map(type -> type.getName().getString())
+        return BuiltInRegistries.ENTITY_TYPE.getOptional(id)
+                .map(type -> type.getDescription().getString())
                 .orElse(entityId);
     }
 }

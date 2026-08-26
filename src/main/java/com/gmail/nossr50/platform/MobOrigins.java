@@ -1,11 +1,11 @@
 package com.gmail.nossr50.platform;
 
 import com.gmail.nossr50.datatypes.mobs.MobOrigin;
-import com.gmail.nossr50.fabric.McMMOAttachments;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.SpawnReason;
-import net.minecraft.world.World;
+import com.gmail.nossr50.neoforge.McMMOAttachments;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.MobSpawnType;
+import net.minecraft.world.level.Level;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -14,10 +14,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Reads and writes a mob's {@link MobOrigin} — the Minecraft-typed half of Hunter's D-HU1 anti-farm
  * gate. {@link MobOrigin} owns the vocabulary and the "does it count" predicate; this owns the mapping
- * from vanilla's {@link SpawnReason} and the attachment access.
+ * from vanilla's {@link MobSpawnType} and the attachment access.
  *
  * <h2>The seam: whatever carries the spawn reason on this version</h2>
- * The plan implied {@code MobEntity#initialize(ServerWorldAccess, LocalDifficulty, SpawnReason,
+ * The plan implied {@code MobEntity#initialize(ServerWorldAccess, LocalDifficulty, MobSpawnType,
  * EntityData)}, which is where both spawner logics hand a reason to a freshly built mob. <b>It is not
  * safe on any version.</b> {@code CaveSpiderEntity} overrides {@code initialize} with a bare
  * {@code return entityData} that deliberately skips {@code SpiderEntity}'s jockey logic and never
@@ -25,9 +25,9 @@ import org.slf4j.LoggerFactory;
  * spawner is one of the two or three most-built grinders in the game.
  *
  * <p>Where vanilla funnels every creation through <b>one</b> factory that carries the reason
- * ({@code EntityType#create(World, SpawnReason)}), that factory is the seam and one injector covers
+ * ({@code EntityType#create(World, MobSpawnType)}), that factory is the seam and one injector covers
  * everything: it is an instance method on {@code EntityType}, a class with no vanilla subclasses, so
- * no mob can override it, and it ignores its own {@code SpawnReason} parameter, so reading the reason
+ * no mob can override it, and it ignores its own {@code MobSpawnType} parameter, so reading the reason
  * there perturbs nothing.
  *
  * <h2>&#128273;&#128273; Where that funnel does not exist, ONE injector is a TRAP</h2>
@@ -37,19 +37,19 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>{@code MobSpawnerLogic}/{@code TrialSpawnerLogic} reach
  *       {@code EntityType.loadEntityWithPassengers(NbtCompound, World, Function)}, which <b>takes no
- *       {@code SpawnReason} at all</b> — the spawner's own {@code SpawnReason.SPAWNER} goes only to
+ *       {@code MobSpawnType} at all</b> — the spawner's own {@code MobSpawnType.SPAWNER} goes only to
  *       {@code canSpawn} and {@code initialize}, never to entity creation</li>
  *   <li>{@code AnimalEntity#breed} reaches {@code createChild} → {@code EntityType.create(World)} —
  *       also no reason</li>
  *   <li>only spawn eggs, dispensers and portals reach
- *       {@code create(ServerWorld, Consumer, BlockPos, SpawnReason, boolean, boolean)}</li>
+ *       {@code create(ServerWorld, Consumer, BlockPos, MobSpawnType, boolean, boolean)}</li>
  * </ul>
  *
  * <p><b>That last method exists on those versions, so retargeting to it BINDS</b> — the mixin audit
  * goes green while spawner-farmed and bred mobs are silently left unmarked. That is strictly worse
  * than an injector that resolves to nothing, because a dead injector is at least loud. So on those
  * versions the stamp is split per origin, one injector at each real spawn site, and
- * {@link #stampOnSpawn(Entity, SpawnReason)} is the entry they share.
+ * {@link #stampOnSpawn(Entity, MobSpawnType)} is the entry they share.
  *
  * <h2>Never write a qualifying origin</h2>
  * {@link #stampOnSpawn} returns without touching the entity when the reason maps to
@@ -84,7 +84,7 @@ public final class MobOrigins {
      * every mob the world spawned by its own rules.
      */
     public static @NotNull MobOrigin of(@NotNull Entity entity) {
-        final String stored = entity.getAttached(McMMOAttachments.MOB_ORIGIN);
+        final String stored = McMMOAttachments.getMobOrigin(entity);
         if (stored == null) {
             return MobOrigin.NATURAL;
         }
@@ -111,15 +111,15 @@ public final class MobOrigins {
 
     /**
      * Stamps a disqualifying origin onto a mob as it is created. Called from
-     * {@code EntityTypeSpawnOriginMixin} for every {@code EntityType#create(World, SpawnReason)}.
+     * {@code EntityTypeSpawnOriginMixin} for every {@code EntityType#create(World, MobSpawnType)}.
      *
      * @param world  the world the entity is being created in; client-side creations are ignored
      * @param reason vanilla's reason for the spawn
      * @param entity the new entity, or {@code null} when the type is behind a disabled feature flag
      */
-    public static void stampOnSpawn(@NotNull World world, @NotNull SpawnReason reason,
+    public static void stampOnSpawn(@NotNull Level world, @NotNull MobSpawnType reason,
             @Nullable Entity entity) {
-        if (entity == null || world.isClient() || !(entity instanceof LivingEntity)) {
+        if (entity == null || world.isClientSide() || !(entity instanceof LivingEntity)) {
             return;
         }
         final MobOrigin origin = classify(reason);
@@ -128,7 +128,7 @@ public final class MobOrigins {
             // reason is about to restore.
             return;
         }
-        entity.setAttached(McMMOAttachments.MOB_ORIGIN, origin.storageKey());
+        McMMOAttachments.setMobOrigin(entity, origin.storageKey());
         announceFirstMark(origin, reason);
     }
 
@@ -144,11 +144,11 @@ public final class MobOrigins {
      * @param entity the newly created entity, or {@code null} if creation failed
      * @param reason the reason its spawn site knows it to be
      */
-    public static void stampOnSpawn(@Nullable Entity entity, @NotNull SpawnReason reason) {
+    public static void stampOnSpawn(@Nullable Entity entity, @NotNull MobSpawnType reason) {
         if (entity == null) {
             return;
         }
-        stampOnSpawn(entity.getWorld(), reason, entity);
+        stampOnSpawn(entity.level(), reason, entity);
     }
 
     /**
@@ -158,7 +158,7 @@ public final class MobOrigins {
      * <p>Without this, a zombie spawner feeding a water column produces drowned that count — which is
      * precisely how drowned farms are built, and it would have been the largest hole left in the gate.
      * {@code convertTo} builds the replacement through {@code EntityType.create(world,
-     * SpawnReason.CONVERSION)}, and {@code CONVERSION} maps to {@link MobOrigin#NATURAL}, so
+     * MobSpawnType.CONVERSION)}, and {@code CONVERSION} maps to {@link MobOrigin#NATURAL}, so
      * {@link #stampOnSpawn} deliberately leaves the new mob unmarked and this runs afterwards to say
      * what it inherited.
      *
@@ -173,7 +173,7 @@ public final class MobOrigins {
         if (origin.countsTowardMastery()) {
             return;
         }
-        to.setAttached(McMMOAttachments.MOB_ORIGIN, origin.storageKey());
+        McMMOAttachments.setMobOrigin(to, origin.storageKey());
     }
 
     /**
@@ -181,11 +181,11 @@ public final class MobOrigins {
      *
      * <h2>⚠️ There is deliberately no {@code default} arm</h2>
      * A switch expression over an enum with no default must be exhaustive, so a Minecraft version that
-     * adds a {@code SpawnReason} <b>fails the compile</b> instead of falling through to "counts". That
+     * adds a {@code MobSpawnType} <b>fails the compile</b> instead of falling through to "counts". That
      * matters more here than anywhere else in the mod: every previous silent failure in this port has
      * been a table or a list that went stale without anything noticing, and the failure direction here
      * is an exploit rather than a shortfall. {@code MobOriginsTest} additionally walks
-     * {@code SpawnReason.values()} at runtime, which catches the case where the mod is run against a
+     * {@code MobSpawnType.values()} at runtime, which catches the case where the mod is run against a
      * newer Minecraft than it was built against.
      *
      * <h2>What is deliberately left counting</h2>
@@ -204,15 +204,15 @@ public final class MobOrigins {
      * Logs the first mark of the session at INFO, so a play-test can tell "the gate refused this mob"
      * apart from "the injector never bound". See {@link #LOGGED_FIRST_MARK}.
      */
-    private static void announceFirstMark(@NotNull MobOrigin origin, @NotNull SpawnReason reason) {
+    private static void announceFirstMark(@NotNull MobOrigin origin, @NotNull MobSpawnType reason) {
         if (LOGGED_FIRST_MARK.compareAndSet(false, true)) {
-            LOGGER.info("Hunter: mob-origin gate is live — first mob marked {} (SpawnReason.{}). "
+            LOGGER.info("Hunter: mob-origin gate is live — first mob marked {} (MobSpawnType.{}). "
                             + "Mobs from this origin will not advance mob mastery.",
                     origin, reason);
         }
     }
 
-    public static @NotNull MobOrigin classify(@NotNull SpawnReason reason) {
+    public static @NotNull MobOrigin classify(@NotNull MobSpawnType reason) {
         return switch (reason) {
             // The gate's whole purpose. isAnySpawner() covers both, but they are spelled out so the
             // mapping stays readable next to the rest.

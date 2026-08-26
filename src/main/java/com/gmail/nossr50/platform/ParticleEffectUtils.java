@@ -1,7 +1,7 @@
 package com.gmail.nossr50.platform;
 
 import com.gmail.nossr50.config.GeneralConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.PlatformLivingEntity;
 import com.gmail.nossr50.platform.PlatformPlayer;
@@ -11,19 +11,19 @@ import it.unimi.dsi.fastutil.ints.IntList;
 import java.util.List;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import net.minecraft.block.Blocks;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.FireworkExplosionComponent;
-import net.minecraft.component.type.FireworksComponent;
-import net.minecraft.entity.projectile.FireworkRocketEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.particle.BlockStateParticleEffect;
-import net.minecraft.particle.ParticleEffect;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.sound.SoundCategory;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.particles.BlockParticleOption;
+import net.minecraft.core.particles.ParticleOptions;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.entity.projectile.FireworkRocketEntity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.FireworkExplosion;
+import net.minecraft.world.item.component.Fireworks;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -40,13 +40,13 @@ import org.jetbrains.annotations.Nullable;
  * {@link SoundManager} keeps the registry lookup behind {@code PlatformPlayer#playSound}.
  *
  * <p><b>Every method is a no-op unless its {@code Particles.*} switch is on</b>, and every method is
- * a no-op off the server thread's {@link ServerWorld} — a client-side {@code World} cannot spawn
+ * a no-op off the server thread's {@link ServerLevel} — a client-side {@code World} cannot spawn
  * server particles, and the callers (combat, block-break, task ticks) all run server-side.
  *
  * <h2>What legacy's Bukkit effects map to on 1.21.11</h2>
  *
  * <p>Bukkit's {@code World#playEffect(Location, Effect, data)} is a different shape from vanilla's
- * {@link ServerWorld#spawnParticles}: Bukkit spawned <em>one</em> particle per call at an exact
+ * {@link ServerLevel#spawnParticles}: Bukkit spawned <em>one</em> particle per call at an exact
  * point, so legacy scattered an effect by calling it repeatedly at hand-picked offsets — nine fixed
  * {@code BlockFace} directions for smoke, and an eleven-way random jitter around the eye position for
  * bleed and cripple ({@code getParticleLocation}). {@code spawnParticles} takes a count and a
@@ -109,8 +109,8 @@ public final class ParticleEffectUtils {
             return;
         }
         spawnAtEyes(livingEntity,
-                () -> new BlockStateParticleEffect(ParticleTypes.BLOCK,
-                        Blocks.REDSTONE_WIRE.getDefaultState()),
+                () -> new BlockParticleOption(ParticleTypes.BLOCK,
+                        Blocks.REDSTONE_WIRE.defaultBlockState()),
                 10);
     }
 
@@ -128,8 +128,8 @@ public final class ParticleEffectUtils {
             return;
         }
         spawnAtEyes(livingEntity,
-                () -> new BlockStateParticleEffect(ParticleTypes.BLOCK,
-                        Blocks.ANVIL.getDefaultState()),
+                () -> new BlockParticleOption(ParticleTypes.BLOCK,
+                        Blocks.ANVIL.defaultBlockState()),
                 20);
     }
 
@@ -138,7 +138,7 @@ public final class ParticleEffectUtils {
         if (player == null || disabled(GeneralConfig::getDodgeEffectEnabled)) {
             return;
         }
-        final ServerWorld world = serverWorldOf(player);
+        final ServerLevel world = serverWorldOf(player);
         if (world != null) {
             playSmokeEffect(world, player.getPos());
         }
@@ -150,15 +150,15 @@ public final class ParticleEffectUtils {
         if (livingEntity == null || disabled(GeneralConfig::getGreaterImpactEffectEnabled)) {
             return;
         }
-        final ServerWorld world = serverWorldOf(livingEntity);
+        final ServerLevel world = serverWorldOf(livingEntity);
         if (world == null) {
             return;
         }
-        final Vec3d eyes = eyePosition(livingEntity);
-        world.spawnParticles(ParticleTypes.EXPLOSION, eyes.x, eyes.y, eyes.z, 1, 0D, 0D, 0D, 0D);
+        final Vec3 eyes = eyePosition(livingEntity);
+        world.sendParticles(ParticleTypes.EXPLOSION, eyes.x, eyes.y, eyes.z, 1, 0D, 0D, 0D, 0D);
         world.playSound(null, eyes.x, eyes.y, eyes.z,
-                net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EXPLODE.value(),
-                SoundCategory.PLAYERS, 1.0F, 1.0F);
+                net.minecraft.sounds.SoundEvents.GENERIC_EXPLODE.value(),
+                SoundSource.PLAYERS, 1.0F, 1.0F);
     }
 
     /** Taming's Call of the Wild, at the summoned mob. Legacy {@code playCallOfTheWildEffect}. */
@@ -166,12 +166,12 @@ public final class ParticleEffectUtils {
         if (livingEntity == null || disabled(GeneralConfig::getCallOfTheWildEffectEnabled)) {
             return;
         }
-        final ServerWorld world = serverWorldOf(livingEntity);
+        final ServerLevel world = serverWorldOf(livingEntity);
         if (world == null) {
             return;
         }
-        final Vec3d eyes = eyePosition(livingEntity);
-        world.spawnParticles(ParticleTypes.FLAME, eyes.x, eyes.y, eyes.z,
+        final Vec3 eyes = eyePosition(livingEntity);
+        world.sendParticles(ParticleTypes.FLAME, eyes.x, eyes.y, eyes.z,
                 10, 0.2D, 0.2D, 0.2D, 0.01D);
     }
 
@@ -223,8 +223,8 @@ public final class ParticleEffectUtils {
     }
 
     /** Legacy's nine-{@code BlockFace} smoke burst, collapsed into one spread-based call. */
-    private static void playSmokeEffect(@NotNull ServerWorld world, @NotNull Vec3d position) {
-        world.spawnParticles(ParticleTypes.SMOKE, position.x, position.y + 0.5D, position.z,
+    private static void playSmokeEffect(@NotNull ServerLevel world, @NotNull Vec3 position) {
+        world.sendParticles(ParticleTypes.SMOKE, position.x, position.y + 0.5D, position.z,
                 9, 0.3D, 0.3D, 0.3D, 0.02D);
     }
 
@@ -252,36 +252,36 @@ public final class ParticleEffectUtils {
      * {@code LargeFireworks}) have therefore been dead in upstream for as long as the comment has.
      */
     private static void spawnFirework(@NotNull PlatformPlayer player, int colour) {
-        final ServerWorld world = serverWorldOf(player);
+        final ServerLevel world = serverWorldOf(player);
         if (world == null) {
             return;
         }
 
-        final FireworkExplosionComponent.Type shape =
+        final FireworkExplosion.Shape shape =
                 McMMOMod.getGeneralConfig().getLargeFireworks()
-                        ? FireworkExplosionComponent.Type.LARGE_BALL
-                        : FireworkExplosionComponent.Type.SMALL_BALL;
-        final FireworkExplosionComponent explosion = new FireworkExplosionComponent(
+                        ? FireworkExplosion.Shape.LARGE_BALL
+                        : FireworkExplosion.Shape.SMALL_BALL;
+        final FireworkExplosion explosion = new FireworkExplosion(
                 shape, IntList.of(colour), IntList.of(), true, false);
 
         final ItemStack rocket = new ItemStack(Items.FIREWORK_ROCKET);
         // Flight duration 0 => detonates on the tick after it spawns, i.e. at the player rather than
         // somewhere above them. Legacy used the same value (fireworkMeta.setPower(0)).
-        rocket.set(DataComponentTypes.FIREWORKS, new FireworksComponent(0, List.of(explosion)));
+        rocket.set(DataComponents.FIREWORKS, new Fireworks(0, List.of(explosion)));
 
-        final Vec3d pos = player.getPos();
+        final Vec3 pos = player.getPos();
         // The (World, ItemStack, x, y, z, shotAtAngle) constructor leaves the shooter null, so the
         // rocket is owned by nobody -- one of the two things keeping this harmless.
         final FireworkRocketEntity firework =
                 new FireworkRocketEntity(world, rocket, pos.x, pos.y, pos.z, true);
         MetadataStore.setFlag(firework, COSMETIC_FIREWORK_KEY);
-        world.spawnEntity(firework);
+        world.addFreshEntity(firework);
     }
 
     /**
      * ⚠️ {@code effect} is a {@link Supplier}, and that is not a style choice.
      *
-     * <p>Building a {@link BlockStateParticleEffect} touches {@code Blocks}, which initialises
+     * <p>Building a {@link BlockParticleOption} touches {@code Blocks}, which initialises
      * {@code Registries} and throws {@code "Not bootstrapped"} outside a registry-backed test. Java
      * evaluates arguments eagerly, so passing the effect by value ran that initialiser <em>before</em>
      * this method could check for a server world — which broke {@code MacesManagerTest}, an ordinary
@@ -291,25 +291,25 @@ public final class ParticleEffectUtils {
      * wrappers in the first place.
      */
     private static void spawnAtEyes(@NotNull PlatformLivingEntity livingEntity,
-            @NotNull Supplier<ParticleEffect> effect, int count) {
-        final ServerWorld world = serverWorldOf(livingEntity);
+            @NotNull Supplier<ParticleOptions> effect, int count) {
+        final ServerLevel world = serverWorldOf(livingEntity);
         if (world == null) {
             return;
         }
-        final Vec3d eyes = eyePosition(livingEntity);
-        world.spawnParticles(effect.get(), eyes.x, eyes.y, eyes.z, count,
+        final Vec3 eyes = eyePosition(livingEntity);
+        world.sendParticles(effect.get(), eyes.x, eyes.y, eyes.z, count,
                 IMPACT_SPREAD, IMPACT_SPREAD, IMPACT_SPREAD, 0D);
     }
 
-    private static @NotNull Vec3d eyePosition(@NotNull PlatformLivingEntity livingEntity) {
-        return livingEntity.unwrap().getEyePos();
+    private static @NotNull Vec3 eyePosition(@NotNull PlatformLivingEntity livingEntity) {
+        return livingEntity.unwrap().getEyePosition();
     }
 
-    private static @Nullable ServerWorld serverWorldOf(@Nullable PlatformLivingEntity entity) {
-        return entity != null && entity.getWorld() instanceof ServerWorld world ? world : null;
+    private static @Nullable ServerLevel serverWorldOf(@Nullable PlatformLivingEntity entity) {
+        return entity != null && entity.getWorld() instanceof ServerLevel world ? world : null;
     }
 
-    private static @Nullable ServerWorld serverWorldOf(@Nullable PlatformPlayer player) {
+    private static @Nullable ServerLevel serverWorldOf(@Nullable PlatformPlayer player) {
         return player == null ? null : player.getWorld();
     }
 }

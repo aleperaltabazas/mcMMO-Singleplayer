@@ -5,14 +5,14 @@ import com.gmail.nossr50.platform.text.TextUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.LoreComponent;
-import net.minecraft.component.type.PotionContentsComponent;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.potion.Potion;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.text.Text;
+import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.alchemy.Potion;
+import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.item.component.ItemLore;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,12 +28,12 @@ import org.slf4j.LoggerFactory;
  * data-component types; managers stay MC-free and decide <i>which</i> {@code ItemSpec}s to spawn,
  * this performs the construction. It is the treasure-drop analogue of {@link BlockDrops}.
  *
- * <p>The §-coded display name / lore carried by the spec are parsed to vanilla {@link Text} via the
+ * <p>The §-coded display name / lore carried by the spec are parsed to vanilla {@link Component} via the
  * Phase 7 {@link TextUtils#toText} parser and attached as {@code CUSTOM_NAME} / {@code LORE}
  * data components — the 1.21 replacement for the legacy {@code ItemMeta} display-name/lore path.
  *
  * <p>A spec carrying an {@link ItemSpec.PotionSpec} additionally gets a
- * {@link PotionContentsComponent}, the 1.21 replacement for legacy's {@code PotionMeta}
+ * {@link PotionContents}, the 1.21 replacement for legacy's {@code PotionMeta}
  * base-potion-type path. This is where the config's {@code PotionData} strings finally meet the
  * registry: the lookup is deferred to here (rather than done at config load) to keep
  * {@code FishingTreasureConfig} and {@link ItemSpec} MC-free.
@@ -66,7 +66,7 @@ public final class ItemSpecBuilder {
 
         final ItemSpec.PotionSpec potion = spec.getPotion();
         if (potion != null) {
-            final Optional<RegistryEntry<Potion>> base = Potions.matchPotion(
+            final Optional<Holder<Potion>> base = Potions.matchPotion(
                     potion.potionType(), potion.upgraded(), potion.extended());
             if (base.isEmpty()) {
                 LOGGER.warn("Could not resolve potion type '{}' (upgraded={}, extended={}) for"
@@ -75,20 +75,20 @@ public final class ItemSpecBuilder {
                         spec.getMaterialId());
                 return Optional.empty();
             }
-            stack.set(DataComponentTypes.POTION_CONTENTS, new PotionContentsComponent(base.get()));
+            stack.set(DataComponents.POTION_CONTENTS, new PotionContents(base.get()));
         }
 
         if (spec.getCustomName() != null) {
-            stack.set(DataComponentTypes.CUSTOM_NAME, TextUtils.toText(spec.getCustomName()));
+            stack.set(DataComponents.CUSTOM_NAME, TextUtils.toText(spec.getCustomName()));
         }
 
         final List<String> lore = spec.getLore();
         if (!lore.isEmpty()) {
-            final List<Text> lines = new ArrayList<>(lore.size());
+            final List<Component> lines = new ArrayList<>(lore.size());
             for (String line : lore) {
                 lines.add(TextUtils.toText(line));
             }
-            stack.set(DataComponentTypes.LORE, new LoreComponent(lines));
+            stack.set(DataComponents.LORE, new ItemLore(lines));
         }
 
         return Optional.of(stack);

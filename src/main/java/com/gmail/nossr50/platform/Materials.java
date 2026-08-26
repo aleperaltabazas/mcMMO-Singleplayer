@@ -1,14 +1,14 @@
 package com.gmail.nossr50.platform;
 
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import net.minecraft.block.Block;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Block;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -23,7 +23,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * <p>CONVERSION_TODO.md Phase 2: "Map org.bukkit.Material enum -> net.minecraft Item/Block
  * registries (registry lookups, not enum switches)." Ported code should hold {@link Item}/
- * {@link Block}/{@link Identifier} instead of the enum, resolving once at load rather than
+ * {@link Block}/{@link ResourceLocation} instead of the enum, resolving once at load rather than
  * per-call where possible.
  *
  * <p>Registries are only populated after Minecraft's bootstrap, so these methods must be called
@@ -52,13 +52,13 @@ public final class Materials {
 
     /**
      * Normalize a Bukkit {@code Material} name (or an already-namespaced id) to an
-     * {@link Identifier}. Unqualified names resolve to the {@code minecraft} namespace, and the
+     * {@link ResourceLocation}. Unqualified names resolve to the {@code minecraft} namespace, and the
      * handful of pre-1.13 names still present in the shipped configs are aliased to their modern
      * registry paths first (see {@link #LEGACY_NAME_ALIASES}).
      *
      * @return the identifier, or {@code null} if the string is not a valid identifier
      */
-    public static @Nullable Identifier idOf(@NotNull String name) {
+    public static @Nullable ResourceLocation idOf(@NotNull String name) {
         final String trimmed = name.trim().toLowerCase(Locale.ROOT);
         if (trimmed.isEmpty()) {
             return null;
@@ -66,19 +66,19 @@ public final class Materials {
         // Alias only unqualified names: an explicitly namespaced id is the caller being specific,
         // and another mod's "foo:water_lily" is not ours to rewrite.
         if (trimmed.indexOf(':') >= 0) {
-            return Identifier.tryParse(trimmed);
+            return ResourceLocation.tryParse(trimmed);
         }
-        return Identifier.ofVanilla(LEGACY_NAME_ALIASES.getOrDefault(trimmed, trimmed));
+        return ResourceLocation.withDefaultNamespace(LEGACY_NAME_ALIASES.getOrDefault(trimmed, trimmed));
     }
 
     /** Resolve an item by Bukkit-style name / namespaced id, empty if unknown. */
     public static @NotNull Optional<Item> item(@NotNull String name) {
-        final Identifier id = idOf(name);
-        if (id == null || !Registries.ITEM.containsId(id)) {
+        final ResourceLocation id = idOf(name);
+        if (id == null || !BuiltInRegistries.ITEM.containsKey(id)) {
             McMMOMod.LOGGER.warn("No vanilla item for material name '{}'", name);
             return Optional.empty();
         }
-        return Optional.of(Registries.ITEM.get(id));
+        return Optional.of(BuiltInRegistries.ITEM.get(id));
     }
 
     /**
@@ -92,18 +92,18 @@ public final class Materials {
 
     /** Resolve a block by Bukkit-style name / namespaced id, empty if unknown. */
     public static @NotNull Optional<Block> block(@NotNull String name) {
-        final Identifier id = idOf(name);
-        if (id == null || !Registries.BLOCK.containsId(id)) {
+        final ResourceLocation id = idOf(name);
+        if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) {
             McMMOMod.LOGGER.warn("No vanilla block for material name '{}'", name);
             return Optional.empty();
         }
-        return Optional.of(Registries.BLOCK.get(id));
+        return Optional.of(BuiltInRegistries.BLOCK.get(id));
     }
 
     /** Whether a vanilla item exists for the given name. Does not log on miss. */
     public static boolean isItem(@NotNull String name) {
-        final Identifier id = idOf(name);
-        return id != null && Registries.ITEM.containsId(id);
+        final ResourceLocation id = idOf(name);
+        return id != null && BuiltInRegistries.ITEM.containsKey(id);
     }
 
     /**
@@ -122,14 +122,14 @@ public final class Materials {
      * test side.
      */
     public static boolean itemRegistryIsPopulated() {
-        return Registries.ITEM.containsId(Identifier.ofVanilla("iron_sword"))
-                && Registries.ITEM.containsId(Identifier.ofVanilla("stone"));
+        return BuiltInRegistries.ITEM.containsKey(ResourceLocation.withDefaultNamespace("iron_sword"))
+                && BuiltInRegistries.ITEM.containsKey(ResourceLocation.withDefaultNamespace("stone"));
     }
 
     /** Whether a vanilla block exists for the given name. Does not log on miss. */
     public static boolean isBlock(@NotNull String name) {
-        final Identifier id = idOf(name);
-        return id != null && Registries.BLOCK.containsId(id);
+        final ResourceLocation id = idOf(name);
+        return id != null && BuiltInRegistries.BLOCK.containsKey(id);
     }
 
     /**
@@ -142,7 +142,7 @@ public final class Materials {
      * name may be a pre-1.13 alias ({@link #LEGACY_NAME_ALIASES}) that differs from it.
      */
     public static @NotNull Optional<String> itemPath(@NotNull String name) {
-        return item(name).map(item -> Registries.ITEM.getId(item).getPath());
+        return item(name).map(item -> BuiltInRegistries.ITEM.getKey(item).getPath());
     }
 
     /**

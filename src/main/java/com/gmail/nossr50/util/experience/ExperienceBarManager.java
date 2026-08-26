@@ -4,7 +4,7 @@ import com.gmail.nossr50.config.experience.ExperienceConfig;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.platform.ExperienceBarWrapper;
 import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.scheduler.ScheduledTask;
 import com.gmail.nossr50.platform.scheduler.TaskScheduler;
 import com.gmail.nossr50.util.Misc;

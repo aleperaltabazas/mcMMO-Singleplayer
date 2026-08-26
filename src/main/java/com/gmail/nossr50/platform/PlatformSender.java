@@ -1,13 +1,13 @@
 package com.gmail.nossr50.platform;
 
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Adapter over a Brigadier {@link ServerCommandSource}, replacing {@code org.bukkit.command
+ * Adapter over a Brigadier {@link CommandSourceStack}, replacing {@code org.bukkit.command
  * .CommandSender} (73 references). Mined usage is tiny: {@code sendMessage} (107) and
  * {@code getName} (9), so the wrapper stays small.
  *
@@ -21,40 +21,40 @@ import org.jetbrains.annotations.Nullable;
  */
 public final class PlatformSender {
 
-    private final ServerCommandSource handle;
+    private final CommandSourceStack handle;
 
-    public PlatformSender(@NotNull ServerCommandSource handle) {
+    public PlatformSender(@NotNull CommandSourceStack handle) {
         this.handle = handle;
     }
 
     /** The wrapped Brigadier source. */
-    public @NotNull ServerCommandSource unwrap() {
+    public @NotNull CommandSourceStack unwrap() {
         return handle;
     }
 
     /** Display name of the source (player name, "Server", command-block name, ...). */
     public @NotNull String getName() {
-        return handle.getName();
+        return handle.getTextName();
     }
 
-    /** Bukkit {@code sendMessage}: non-broadcast chat feedback. Text is the locked target type. */
-    public void sendMessage(@NotNull Text message) {
-        handle.sendFeedback(() -> message, false);
+    /** Bukkit {@code sendMessage}: non-broadcast chat feedback. Component is the locked target type. */
+    public void sendMessage(@NotNull Component message) {
+        handle.sendSuccess(() -> message, false);
     }
 
     /** Error-styled feedback (Bukkit red {@code sendMessage} convention). */
-    public void sendError(@NotNull Text message) {
-        handle.sendError(message);
+    public void sendError(@NotNull Component message) {
+        handle.sendFailure(message);
     }
 
     /** Whether this source is a player (Bukkit {@code sender instanceof Player}). */
     public boolean isPlayer() {
-        return handle.isExecutedByPlayer();
+        return handle.isPlayer();
     }
 
     /** The player behind this source, or {@code null} for console/command-block sources. */
     public @Nullable PlatformPlayer getPlayer() {
-        final ServerPlayerEntity player = handle.getPlayer();
+        final ServerPlayer player = handle.getPlayer();
         return player == null ? null : new PlatformPlayer(player);
     }
 }

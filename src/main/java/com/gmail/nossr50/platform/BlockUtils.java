@@ -3,16 +3,16 @@ package com.gmail.nossr50.platform;
 import com.gmail.nossr50.util.BlockRules;
 import com.gmail.nossr50.util.PlacedBlockTracker;
 import java.util.List;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.tag.BlockTags;
-import net.minecraft.state.property.IntProperty;
-import net.minecraft.state.property.Property;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.IntegerProperty;
+import net.minecraft.world.level.block.state.properties.Property;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -27,7 +27,7 @@ import org.jetbrains.annotations.Nullable;
  *   <li>a live {@link Block}/{@link BlockState} → its vanilla registry-id <b>path</b>
  *       ({@code oak_log}), which is what {@link com.gmail.nossr50.util.MaterialMapStore} and (via
  *       {@code ConfigStringUtils}) the {@code experience.yml} tables are keyed on;</li>
- *   <li>a live {@link World} + {@link BlockPos} → the {@link PlacedBlockTracker}'s two keys (the
+ *   <li>a live {@link Level} + {@link BlockPos} → the {@link PlacedBlockTracker}'s two keys (the
  *       world's registry key, and {@link BlockPos#asLong()}).</li>
  * </ul>
  *
@@ -68,7 +68,7 @@ public final class BlockUtils {
      * {@code minecraft:oak_log}) — the key {@link BlockRules} is keyed on.
      */
     private static @NotNull String idPath(@NotNull Block block) {
-        return Registries.BLOCK.getId(block).getPath();
+        return BuiltInRegistries.BLOCK.getKey(block).getPath();
     }
 
     // --- Super-ability activation gates -------------------------------------
@@ -154,7 +154,7 @@ public final class BlockUtils {
      */
     public static boolean affectedByBerserk(@NotNull BlockState blockState) {
         return BlockRules.affectedByBerserkExceptSnowLayer(idPath(blockState.getBlock()))
-                || blockState.isOf(Blocks.SNOW);
+                || blockState.is(Blocks.SNOW);
     }
 
     // --- Woodcutting / tree ------------------------------------------------
@@ -237,8 +237,8 @@ public final class BlockUtils {
      */
     public static @Nullable String getHylianTreasureGroup(@NotNull BlockState blockState) {
         return BlockRules.hylianTreasureGroup(idPath(blockState.getBlock()),
-                () -> blockState.isIn(BlockTags.SAPLINGS),
-                () -> blockState.isIn(BlockTags.FLOWER_POTS));
+                () -> blockState.is(BlockTags.SAPLINGS),
+                () -> blockState.is(BlockTags.FLOWER_POTS));
     }
 
     // --- Crop maturity (legacy Bukkit Ageable) ------------------------------
@@ -246,7 +246,7 @@ public final class BlockUtils {
     /**
      * The current and maximum value of a block's {@code age} state property — the vanilla equivalent
      * of Bukkit's {@code Ageable} that legacy Herbalism read to decide crop maturity. Vanilla has no
-     * single {@code Ageable} interface, so this scans for the {@link IntProperty} named {@code "age"}
+     * single {@code Ageable} interface, so this scans for the {@link IntegerProperty} named {@code "age"}
      * (every crop/plant that legacy treated as ageable exposes exactly one), returning {@code null}
      * for a block with no such property (stone, a log, a flower).
      *
@@ -254,13 +254,13 @@ public final class BlockUtils {
      * @return the age info, or {@code null} if the block has no {@code age} property
      */
     public static @Nullable AgeableState getAgeableState(@NotNull BlockState blockState) {
-        final IntProperty ageProperty = ageProperty(blockState);
+        final IntegerProperty ageProperty = ageProperty(blockState);
         if (ageProperty == null) {
             return null;
         }
-        final int maxAge = ageProperty.getValues().stream()
+        final int maxAge = ageProperty.getPossibleValues().stream()
                 .mapToInt(Integer::intValue).max().orElse(0);
-        return new AgeableState(blockState.get(ageProperty), maxAge);
+        return new AgeableState(blockState.getValue(ageProperty), maxAge);
     }
 
     /**
@@ -277,28 +277,28 @@ public final class BlockUtils {
      * @return the re-aged state, or the original if it has no {@code age} property
      */
     public static @NotNull BlockState withAge(@NotNull BlockState blockState, int age) {
-        final IntProperty ageProperty = ageProperty(blockState);
+        final IntegerProperty ageProperty = ageProperty(blockState);
         if (ageProperty == null) {
             return blockState;
         }
         int min = Integer.MAX_VALUE;
         int max = Integer.MIN_VALUE;
-        for (int value : ageProperty.getValues()) {
+        for (int value : ageProperty.getPossibleValues()) {
             min = Math.min(min, value);
             max = Math.max(max, value);
         }
-        return blockState.with(ageProperty, Math.max(min, Math.min(age, max)));
+        return blockState.setValue(ageProperty, Math.max(min, Math.min(age, max)));
     }
 
     /**
-     * The {@link IntProperty} named {@code "age"} on a block, or {@code null} if it has none. Vanilla
+     * The {@link IntegerProperty} named {@code "age"} on a block, or {@code null} if it has none. Vanilla
      * has no single {@code Ageable} interface, so both {@link #getAgeableState} and {@link #withAge}
      * locate crop maturity through this one scan; every crop/plant legacy treated as ageable exposes
      * exactly one such property, and the {@code "age"} filter skips {@code stage}/{@code layers}/etc.
      */
-    private static @Nullable IntProperty ageProperty(@NotNull BlockState blockState) {
+    private static @Nullable IntegerProperty ageProperty(@NotNull BlockState blockState) {
         for (Property<?> property : blockState.getProperties()) {
-            if (property instanceof IntProperty ageProperty && "age".equals(ageProperty.getName())) {
+            if (property instanceof IntegerProperty ageProperty && "age".equals(ageProperty.getName())) {
                 return ageProperty;
             }
         }
@@ -321,15 +321,15 @@ public final class BlockUtils {
      * path — see {@link #markUnnatural} for the manufactured-block sources that are.
      *
      * <p>A vanilla {@link BlockState} carries no location (Bukkit's {@code Block} did), so these take a
-     * live {@link World} + {@link BlockPos} and pack them into the {@link PlacedBlockTracker}'s two
+     * live {@link Level} + {@link BlockPos} and pack them into the {@link PlacedBlockTracker}'s two
      * keys.
      */
-    public static void markPlaced(@NotNull World world, @NotNull BlockPos pos) {
+    public static void markPlaced(@NotNull Level world, @NotNull BlockPos pos) {
         markUnnatural(world, pos);
     }
 
     /** @see BlockRules#markUnnatural */
-    public static void markUnnatural(@NotNull World world, @NotNull BlockPos pos) {
+    public static void markUnnatural(@NotNull Level world, @NotNull BlockPos pos) {
         BlockRules.markUnnatural(worldKey(world), pos.asLong());
     }
 
@@ -345,7 +345,7 @@ public final class BlockUtils {
      *
      * @param formed the block that has just appeared at {@code pos}
      */
-    public static void markLavaFormed(@NotNull World world, @NotNull BlockPos pos,
+    public static void markLavaFormed(@NotNull Level world, @NotNull BlockPos pos,
             @NotNull Block formed) {
         if (formed == Blocks.OBSIDIAN) {
             return;
@@ -354,7 +354,7 @@ public final class BlockUtils {
     }
 
     /** @see BlockRules#markSnowGolemFormed */
-    public static void markSnowGolemFormed(@NotNull World world, @NotNull BlockPos pos,
+    public static void markSnowGolemFormed(@NotNull Level world, @NotNull BlockPos pos,
             @NotNull Block formed) {
         BlockRules.markSnowGolemFormed(worldKey(world), pos.asLong(), idPath(formed));
     }
@@ -370,14 +370,14 @@ public final class BlockUtils {
      *                 so their flags are simply dropped
      * @param motion   the direction the blocks travelled
      */
-    public static void movePlacedFlags(@NotNull World world, @NotNull List<BlockPos> moved,
+    public static void movePlacedFlags(@NotNull Level world, @NotNull List<BlockPos> moved,
             @NotNull List<BlockPos> broken, @NotNull Direction motion) {
         final long[] movedFrom = new long[moved.size()];
         final long[] movedTo = new long[moved.size()];
         for (int i = 0; i < moved.size(); i++) {
             final BlockPos pos = moved.get(i);
             movedFrom[i] = pos.asLong();
-            movedTo[i] = pos.offset(motion).asLong();
+            movedTo[i] = pos.relative(motion).asLong();
         }
         final long[] brokenKeys = new long[broken.size()];
         for (int i = 0; i < broken.size(); i++) {
@@ -387,17 +387,17 @@ public final class BlockUtils {
     }
 
     /** @see BlockRules#markNatural */
-    public static void markNatural(@NotNull World world, @NotNull BlockPos pos) {
+    public static void markNatural(@NotNull Level world, @NotNull BlockPos pos) {
         BlockRules.markNatural(worldKey(world), pos.asLong());
     }
 
     /** @see BlockRules#isRewardIneligible */
-    public static boolean isRewardIneligible(@NotNull World world, @NotNull BlockPos pos) {
+    public static boolean isRewardIneligible(@NotNull Level world, @NotNull BlockPos pos) {
         return BlockRules.isRewardIneligible(worldKey(world), pos.asLong());
     }
 
     /** The world's registry key, stringified — the {@link PlacedBlockTracker}'s per-world key. */
-    private static @NotNull String worldKey(@NotNull World world) {
-        return world.getRegistryKey().getValue().toString();
+    private static @NotNull String worldKey(@NotNull Level world) {
+        return world.dimension().location().toString();
     }
 }

@@ -1,19 +1,18 @@
 package com.gmail.nossr50.platform;
 
-import com.gmail.nossr50.fabric.McMMOMod;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.attribute.EntityAttribute;
-import net.minecraft.entity.attribute.EntityAttributeInstance;
-import net.minecraft.entity.attribute.EntityAttributeModifier;
-import net.minecraft.entity.attribute.EntityAttributeModifier.Operation;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.Identifier;
+import com.gmail.nossr50.neoforge.McMMOMod;
+import net.minecraft.core.Holder;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attribute;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier.Operation;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * The single owner of every {@link EntityAttributeModifier} mcMMO applies to an entity (F2).
+ * The single owner of every {@link AttributeModifier} mcMMO applies to an entity (F2).
  *
  * <p>Continuous-state skills — Agility's Fleet Footed, later Stealth's Padfoot and Unarmored — buff
  * a player only <em>while</em> some condition holds, which means something has to take the buff back
@@ -24,18 +23,18 @@ import org.jetbrains.annotations.NotNull;
  *
  * <p>Three properties make that safe:
  * <ul>
- *   <li><b>Identity, not accumulation.</b> Each buff has a stable {@link Identifier}
+ *   <li><b>Identity, not accumulation.</b> Each buff has a stable {@link ResourceLocation}
  *       ({@link Managed}); re-applying replaces the existing modifier in place rather than adding a
  *       second one, so a per-tick caller cannot stack itself into orbit. Re-applying the same value
  *       is a no-op, which matters because this runs 20×/s.</li>
- *   <li><b>Temporary, never persistent.</b> {@link EntityAttributeInstance#addTemporaryModifier}
+ *   <li><b>Temporary, never persistent.</b> {@link AttributeInstance#addTemporaryModifier}
  *       writes to a different map than {@code persistentModifiers}, and only the latter is
  *       serialized (bytecode-verified). So even a modifier this service somehow fails to remove dies
  *       with the entity instead of being written into the save file, where no later code fix could
  *       reach it. That is the difference between a bug and an unrecoverable save.</li>
  *   <li><b>Re-derived, never assumed.</b> Callers must re-apply from live state every tick rather
  *       than tracking "is it on?" themselves. Respawning and leaving the End both construct a
- *       <em>new</em> {@link ServerPlayerEntity} ({@code PlayerManager#respawnPlayer}), silently
+ *       <em>new</em> {@link ServerPlayer} ({@code PlayerManager#respawnPlayer}), silently
  *       discarding every modifier on the old one — so cached "already applied" state goes wrong on
  *       the first death, while re-deriving self-heals on the next tick.</li>
  * </ul>
@@ -68,7 +67,7 @@ public final class SkillAttributeService {
          * knows, so a renamed id strands the old modifier permanently: an unremovable speed buff on
          * everyone who has already played. Rename the constant, never the literal.
          */
-        MOVEMENT_FLEET_FOOTED_LAND(EntityAttributes.GENERIC_MOVEMENT_SPEED, "agility_fleet_footed",
+        MOVEMENT_FLEET_FOOTED_LAND(Attributes.MOVEMENT_SPEED, "agility_fleet_footed",
                 Operation.ADD_MULTIPLIED_TOTAL),
 
         /**
@@ -82,7 +81,7 @@ public final class SkillAttributeService {
          * same attribute Depth Strider uses, so the two stack additively and the config cap is what
          * stops a max-Swimming Depth Strider III player from becoming silly.
          */
-        MOVEMENT_FLEET_FOOTED_WATER(EntityAttributes.GENERIC_WATER_MOVEMENT_EFFICIENCY,
+        MOVEMENT_FLEET_FOOTED_WATER(Attributes.WATER_MOVEMENT_EFFICIENCY,
                 "agility_fleet_footed_water", Operation.ADD_VALUE),
 
         /**
@@ -107,7 +106,7 @@ public final class SkillAttributeService {
          * multiplicative operation would make the same config number mean different speeds as vanilla
          * retunes its default.
          */
-        STEALTH_PADFOOT(EntityAttributes.PLAYER_SNEAKING_SPEED, "stealth_padfoot", Operation.ADD_VALUE),
+        STEALTH_PADFOOT(Attributes.SNEAKING_SPEED, "stealth_padfoot", Operation.ADD_VALUE),
 
         /**
          * Unarmored → Iron Skin. The innate "skin" armour, live only while all four armour slots are
@@ -143,12 +142,12 @@ public final class SkillAttributeService {
          * diamond skin (20/0) still takes noticeably more from a heavy blow than a diamond set
          * (20/8), which also keeps its enchantments.
          */
-        UNARMORED_IRON_SKIN(EntityAttributes.GENERIC_ARMOR, "unarmored_iron_skin", Operation.ADD_VALUE),
+        UNARMORED_IRON_SKIN(Attributes.ARMOR, "unarmored_iron_skin", Operation.ADD_VALUE),
 
         /**
          * Taming → the pet combat mode's engage range. The <b>only managed buff that is not applied
          * to a player</b>, which is why this service is typed on {@link LivingEntity} rather than
-         * {@code ServerPlayerEntity}.
+         * {@code ServerPlayer}.
          *
          * <p>It exists because "my pets ignore what I shoot" was never about the weapon. A wolf's
          * base {@code FOLLOW_RANGE} is {@code 16.0} — {@code WolfEntity.createWolfAttributes()} sets
@@ -172,20 +171,20 @@ public final class SkillAttributeService {
          * <p>⚠️ Cost is superlinear — 16 → 32 takes the search box from ~32³ to ~48³, about 3.4× the
          * volume, per repath, per pet. Hence the config cap, and hence "only while engaged".
          */
-        TAMING_PET_ENGAGE_RANGE(EntityAttributes.GENERIC_FOLLOW_RANGE, "taming_pet_engage",
+        TAMING_PET_ENGAGE_RANGE(Attributes.FOLLOW_RANGE, "taming_pet_engage",
                 Operation.ADD_VALUE);
 
-        private final RegistryEntry<EntityAttribute> attribute;
-        private final Identifier id;
+        private final Holder<Attribute> attribute;
+        private final ResourceLocation id;
         private final Operation operation;
 
-        Managed(RegistryEntry<EntityAttribute> attribute, String path, Operation operation) {
+        Managed(Holder<Attribute> attribute, String path, Operation operation) {
             this.attribute = attribute;
-            this.id = Identifier.of(McMMOMod.MOD_ID, path);
+            this.id = ResourceLocation.fromNamespaceAndPath(McMMOMod.MOD_ID, path);
             this.operation = operation;
         }
 
-        public @NotNull Identifier id() {
+        public @NotNull ResourceLocation id() {
             return id;
         }
 
@@ -209,7 +208,7 @@ public final class SkillAttributeService {
      *               removes it
      */
     public static void set(@NotNull LivingEntity entity, @NotNull Managed buff, double amount) {
-        final EntityAttributeInstance instance = entity.getAttributeInstance(buff.attribute);
+        final AttributeInstance instance = entity.getAttribute(buff.attribute);
         if (instance == null) {
             // A player always has these attributes; a null here means the attribute was not
             // registered for this entity type, which is a wiring bug rather than a game state.
@@ -218,7 +217,7 @@ public final class SkillAttributeService {
             return;
         }
 
-        final EntityAttributeModifier existing = instance.getModifier(buff.id());
+        final AttributeModifier existing = instance.getModifier(buff.id());
         if (amount == 0.0) {
             if (existing != null) {
                 instance.removeModifier(buff.id());
@@ -226,18 +225,18 @@ public final class SkillAttributeService {
             return;
         }
         if (existing != null) {
-            if (existing.value() == amount && existing.operation() == buff.operation()) {
+            if (existing.amount() == amount && existing.operation() == buff.operation()) {
                 return; // Already exactly right — the common case on a per-tick caller.
             }
             instance.removeModifier(buff.id());
         }
-        instance.addTemporaryModifier(
-                new EntityAttributeModifier(buff.id(), amount, buff.operation()));
+        instance.addTransientModifier(
+                new AttributeModifier(buff.id(), amount, buff.operation()));
     }
 
     /** Whether this managed buff is currently applied to the player. Test/diagnostic seam. */
     public static boolean isApplied(@NotNull LivingEntity entity, @NotNull Managed buff) {
-        final EntityAttributeInstance instance = entity.getAttributeInstance(buff.attribute);
+        final AttributeInstance instance = entity.getAttribute(buff.attribute);
         return instance != null && instance.getModifier(buff.id()) != null;
     }
 
@@ -246,12 +245,12 @@ public final class SkillAttributeService {
      * lets a test distinguish "removed" from "applied at zero" without reaching into vanilla.
      */
     public static double appliedValue(@NotNull LivingEntity entity, @NotNull Managed buff) {
-        final EntityAttributeInstance instance = entity.getAttributeInstance(buff.attribute);
+        final AttributeInstance instance = entity.getAttribute(buff.attribute);
         if (instance == null) {
             return 0.0;
         }
-        final EntityAttributeModifier modifier = instance.getModifier(buff.id());
-        return modifier == null ? 0.0 : modifier.value();
+        final AttributeModifier modifier = instance.getModifier(buff.id());
+        return modifier == null ? 0.0 : modifier.amount();
     }
 
     /**
@@ -264,7 +263,7 @@ public final class SkillAttributeService {
      */
     public static void clearAll(@NotNull LivingEntity entity) {
         for (Managed buff : Managed.values()) {
-            final EntityAttributeInstance instance = entity.getAttributeInstance(buff.attribute);
+            final AttributeInstance instance = entity.getAttribute(buff.attribute);
             if (instance != null) {
                 instance.removeModifier(buff.id());
             }

@@ -1,6 +1,6 @@
 package com.gmail.nossr50.datatypes.skills;
 
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.locale.LocaleLoader;
 import com.gmail.nossr50.util.text.StringUtils;
 

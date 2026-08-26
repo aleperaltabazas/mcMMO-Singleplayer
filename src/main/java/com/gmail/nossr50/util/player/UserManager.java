@@ -1,7 +1,7 @@
 package com.gmail.nossr50.util.player;
 
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import com.gmail.nossr50.util.LogUtils;
 import com.google.common.collect.ImmutableList;

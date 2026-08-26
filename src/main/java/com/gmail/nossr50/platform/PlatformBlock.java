@@ -2,16 +2,16 @@ package com.gmail.nossr50.platform;
 
 import java.util.Collections;
 import java.util.List;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -19,7 +19,7 @@ import org.jetbrains.annotations.NotNull;
  * {@code getType()} calls — the heaviest block surface). Bukkit's {@code Block} is location-bound
  * (knows its world + coordinates), whereas Yarn splits identity ({@link Block}), snapshot
  * ({@link BlockState}) and location ({@link BlockPos}). This wrapper re-bundles them as
- * {@code (World, BlockPos)} so ported code keeps the Bukkit mental model.
+ * {@code (Level, BlockPos)} so ported code keeps the Bukkit mental model.
  *
  * <p>Grounded in mined usage: getType/setType, getState, getRelative, getX/Y/Z, getWorld,
  * getDrops. Bukkit {@code getType()} returned a {@code Material}; here use {@link #getBlock()}
@@ -27,15 +27,15 @@ import org.jetbrains.annotations.NotNull;
  */
 public final class PlatformBlock {
 
-    private final World world;
+    private final Level world;
     private final BlockPos pos;
 
-    public PlatformBlock(@NotNull World world, @NotNull BlockPos pos) {
+    public PlatformBlock(@NotNull Level world, @NotNull BlockPos pos) {
         this.world = world;
         this.pos = pos;
     }
 
-    public @NotNull World getWorld() {
+    public @NotNull Level getWorld() {
         return world;
     }
 
@@ -68,8 +68,8 @@ public final class PlatformBlock {
     }
 
     /** Registry id of the current block, e.g. {@code minecraft:stone}. */
-    public @NotNull Identifier getTypeId() {
-        return Registries.BLOCK.getId(getBlock());
+    public @NotNull ResourceLocation getTypeId() {
+        return BuiltInRegistries.BLOCK.getKey(getBlock());
     }
 
     public boolean isAir() {
@@ -78,22 +78,22 @@ public final class PlatformBlock {
 
     /** Bukkit {@code setType(Material)}: set to a block's default state. */
     public void setType(@NotNull Block block) {
-        world.setBlockState(pos, block.getDefaultState());
+        world.setBlockAndUpdate(pos, block.defaultBlockState());
     }
 
     /** Bukkit {@code setBlockData(BlockData)}: set to a specific state. */
     public void setState(@NotNull BlockState state) {
-        world.setBlockState(pos, state);
+        world.setBlockAndUpdate(pos, state);
     }
 
     // --- Navigation (Bukkit getRelative) ------------------------------------
 
     public @NotNull PlatformBlock getRelative(@NotNull Direction direction) {
-        return new PlatformBlock(world, pos.offset(direction));
+        return new PlatformBlock(world, pos.relative(direction));
     }
 
     public @NotNull PlatformBlock getRelative(@NotNull Direction direction, int distance) {
-        return new PlatformBlock(world, pos.offset(direction, distance));
+        return new PlatformBlock(world, pos.relative(direction, distance));
     }
 
     // --- Drops (Bukkit getDrops) --------------------------------------------
@@ -103,10 +103,10 @@ public final class PlatformBlock {
      * server-authoritative); returns empty on the logical client.
      */
     public @NotNull List<ItemStack> getDrops() {
-        if (!(world instanceof ServerWorld serverWorld)) {
+        if (!(world instanceof ServerLevel serverWorld)) {
             return Collections.emptyList();
         }
         final BlockEntity blockEntity = world.getBlockEntity(pos);
-        return Block.getDroppedStacks(getState(), serverWorld, pos, blockEntity);
+        return Block.getDrops(getState(), serverWorld, pos, blockEntity);
     }
 }

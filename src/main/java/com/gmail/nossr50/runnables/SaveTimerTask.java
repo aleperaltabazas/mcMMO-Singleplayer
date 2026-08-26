@@ -1,6 +1,6 @@
 package com.gmail.nossr50.runnables;
 
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.util.CancellableRunnable;
 import com.gmail.nossr50.util.LogUtils;
 import com.gmail.nossr50.util.player.UserManager;

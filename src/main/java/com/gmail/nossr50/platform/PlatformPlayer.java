@@ -1,43 +1,42 @@
 package com.gmail.nossr50.platform;
 
 import com.gmail.nossr50.datatypes.skills.ToolType;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.text.TextUtils;
 import com.gmail.nossr50.platform.ItemUtils;
 import java.util.UUID;
-import net.minecraft.advancement.AdvancementEntry;
-import net.minecraft.advancement.PlayerAdvancementTracker;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.NbtComponent;
-import net.minecraft.enchantment.Enchantment;
-import net.minecraft.enchantment.EnchantmentHelper;
-import net.minecraft.enchantment.Enchantments;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.advancements.AdvancementHolder;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.sound.SoundCategory;
-import net.minecraft.sound.SoundEvent;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.GameMode;
+import net.minecraft.server.PlayerAdvancements;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.VisibleForTesting;
 
 /**
- * Adapter over a vanilla {@link ServerPlayerEntity}, replacing {@code org.bukkit.entity.Player}
+ * Adapter over a vanilla {@link ServerPlayer}, replacing {@code org.bukkit.entity.Player}
  * (217 references — the single heaviest Bukkit surface in mcMMO).
  *
  * <p>Only the mined top-usage subset of the Bukkit {@code Player} API is wrapped (see
@@ -55,8 +54,8 @@ import org.jetbrains.annotations.VisibleForTesting;
  *       keyed by entity) or Fabric's data-attachment API, designed in its own step.</li>
  * </ul>
  *
- * <p>Singleplayer note: {@code sendMessage} already targets {@link Text}, the locked text type
- * (no Adventure), so messaging maps 1:1. Server-side only ({@link ServerPlayerEntity}).
+ * <p>Singleplayer note: {@code sendMessage} already targets {@link Component}, the locked text type
+ * (no Adventure), so messaging maps 1:1. Server-side only ({@link ServerPlayer}).
  *
  * <p><b>The wrapped entity is NOT stable for a session</b> — see {@link #rebind}. One
  * {@code PlatformPlayer} is built per login and handed to the player's {@code McMMOPlayer} (and,
@@ -70,22 +69,22 @@ public final class PlatformPlayer {
      * client thread can read player state during world open/close — the same thread split that made
      * {@link com.gmail.nossr50.util.player.UserManager}'s registry a {@code ConcurrentHashMap}.
      */
-    private volatile ServerPlayerEntity handle;
+    private volatile ServerPlayer handle;
 
-    public PlatformPlayer(@NotNull ServerPlayerEntity handle) {
+    public PlatformPlayer(@NotNull ServerPlayer handle) {
         this.handle = handle;
     }
 
     /** The wrapped vanilla player. Use when the mimicked surface is insufficient. */
-    public @NotNull ServerPlayerEntity unwrap() {
+    public @NotNull ServerPlayer unwrap() {
         return handle;
     }
 
     /**
      * Point this wrapper at the player's replacement entity after a respawn.
      *
-     * <p>Vanilla does not reuse the {@link ServerPlayerEntity} across a respawn:
-     * {@code PlayerManager#respawnPlayer} calls {@code ServerWorld.removePlayer(old, reason)} and
+     * <p>Vanilla does not reuse the {@link ServerPlayer} across a respawn:
+     * {@code PlayerManager#respawnPlayer} calls {@code ServerLevel.removePlayer(old, reason)} and
      * then constructs a brand-new one (bytecode-verified against 1.21.11). Both the death path and
      * the "returned from the End" path route through it, so a wrapper bound once at login goes
      * stale on the first death <i>or</i> the first End exit, and every MC-typed call through it
@@ -102,14 +101,14 @@ public final class PlatformPlayer {
      *
      * @param replacement the freshly constructed entity for the same player
      */
-    public void rebind(@NotNull ServerPlayerEntity replacement) {
-        if (!replacement.getUuid().equals(handle.getUuid())) {
+    public void rebind(@NotNull ServerPlayer replacement) {
+        if (!replacement.getUUID().equals(handle.getUUID())) {
             // Never swap one player's handle for another's; a mis-wired caller would silently
             // redirect every skill side effect onto the wrong player.
             McMMOMod.LOGGER.error(
                     "Refusing to rebind mcMMO player handle for {} ({}) to a different player {} ({}).",
-                    getName(), handle.getUuid(), replacement.getName().getString(),
-                    replacement.getUuid());
+                    getName(), handle.getUUID(), replacement.getName().getString(),
+                    replacement.getUUID());
             return;
         }
         this.handle = replacement;
@@ -117,29 +116,29 @@ public final class PlatformPlayer {
 
     // --- Identity -----------------------------------------------------------
 
-    /** Player name (Bukkit {@code getName()}). {@link ServerPlayerEntity#getName()} returns
-     *  {@link Text}, so this flattens it to a plain string. */
+    /** Player name (Bukkit {@code getName()}). {@link ServerPlayer#getName()} returns
+     *  {@link Component}, so this flattens it to a plain string. */
     public @NotNull String getName() {
         return handle.getName().getString();
     }
 
     public @NotNull UUID getUniqueId() {
-        return handle.getUuid();
+        return handle.getUUID();
     }
 
     // --- World / position ---------------------------------------------------
 
-    public @NotNull ServerWorld getWorld() {
-        // getEntityWorld() replaced Bukkit getWorld(); for a ServerPlayerEntity it is a ServerWorld.
-        return (ServerWorld) handle.getEntityWorld();
+    public @NotNull ServerLevel getWorld() {
+        // getEntityWorld() replaced Bukkit getWorld(); for a ServerPlayer it is a ServerLevel.
+        return (ServerLevel) handle.getCommandSenderWorld();
     }
 
     public @NotNull BlockPos getBlockPos() {
-        return handle.getBlockPos();
+        return handle.blockPosition();
     }
 
-    public @NotNull Vec3d getPos() {
-        return handle.getPos();
+    public @NotNull Vec3 getPos() {
+        return handle.position();
     }
 
     // --- Vitals -------------------------------------------------------------
@@ -159,8 +158,8 @@ public final class PlatformPlayer {
 
     // --- Mode / movement state ---------------------------------------------
 
-    public @NotNull GameMode getGameMode() {
-        return handle.interactionManager.getGameMode();
+    public @NotNull GameType getGameMode() {
+        return handle.gameMode.getGameModeForPlayer();
     }
 
     public boolean isCreative() {
@@ -172,7 +171,7 @@ public final class PlatformPlayer {
     }
 
     public boolean isSneaking() {
-        return handle.isSneaking();
+        return handle.isCrouching();
     }
 
     /**
@@ -184,35 +183,35 @@ public final class PlatformPlayer {
         return handle.isBlocking();
     }
 
-    // --- Messaging (Text = locked target type) ------------------------------
+    // --- Messaging (Component = locked target type) ------------------------------
 
     /**
      * Chat message (Bukkit {@code sendMessage}).
      *
      * <p>Takes mcMMO's own message representation — a legacy section-code ({@code §}) string — and
-     * renders it to vanilla {@link Text} here. That direction is deliberate (Phase 2): the
+     * renders it to vanilla {@link Component} here. That direction is deliberate (Phase 2): the
      * section-code string is what every locale file, renderer and skill manager actually produces,
-     * so {@link Text} is a <em>presentation</em> detail belonging on the Minecraft side of the
+     * so {@link Component} is a <em>presentation</em> detail belonging on the Minecraft side of the
      * boundary. Keeping the conversion here is what lets {@code NotificationManager} and the 29
      * stats renderers stay Minecraft-free and band-independent.
      */
     public void sendMessage(@NotNull String message) {
-        handle.sendMessage(TextUtils.toText(message));
+        handle.sendSystemMessage(TextUtils.toText(message));
     }
 
     /** Action-bar / overlay message (Bukkit {@code sendActionBar}). See {@link #sendMessage}. */
     public void sendActionBar(@NotNull String message) {
-        handle.sendMessage(TextUtils.toText(message), true);
+        handle.sendSystemMessage(TextUtils.toText(message), true);
     }
 
     // --- Sound (Bukkit Player#playSound / World#playSound) -------------------
 
     /**
      * Plays a sound at this player's position. Replaces Bukkit's
-     * {@code Player#playSound(Location, Sound, SoundCategory, volume, pitch)} and
+     * {@code Player#playSound(Location, Sound, SoundSource, volume, pitch)} and
      * {@code World#playSound(...)}; in singleplayer the "only this player hears it" vs. "everyone
      * nearby hears it" distinction collapses (one listener), so both route here — spatialized at the
-     * player via {@link ServerWorld#playSound}. The {@code soundRegistryId} is a namespaced sound id
+     * player via {@link ServerLevel#playSound}. The {@code soundRegistryId} is a namespaced sound id
      * (e.g. {@code minecraft:block.anvil.place}, from {@link com.gmail.nossr50.util.sounds.SoundType});
      * an unknown id is logged and skipped rather than thrown, so a bad custom id never breaks gameplay.
      *
@@ -223,13 +222,13 @@ public final class PlatformPlayer {
      */
     public void playSound(@NotNull String soundRegistryId, @NotNull PlatformSoundCategory category,
             float volume, float pitch) {
-        Identifier id = Identifier.tryParse(soundRegistryId);
-        if (id == null || !Registries.SOUND_EVENT.containsId(id)) {
+        ResourceLocation id = ResourceLocation.tryParse(soundRegistryId);
+        if (id == null || !BuiltInRegistries.SOUND_EVENT.containsKey(id)) {
             McMMOMod.LOGGER.warn("No vanilla sound for id '{}'", soundRegistryId);
             return;
         }
-        SoundEvent soundEvent = Registries.SOUND_EVENT.get(id);
-        Vec3d pos = getPos();
+        SoundEvent soundEvent = BuiltInRegistries.SOUND_EVENT.get(id);
+        Vec3 pos = getPos();
         // except = null → all players in range hear it (the one player, in singleplayer).
         getWorld().playSound(null, pos.x, pos.y, pos.z, soundEvent, toVanilla(category), volume,
                 pitch);
@@ -246,22 +245,22 @@ public final class PlatformPlayer {
      * every mcMMO sound on the wrong volume slider.
      */
     @VisibleForTesting
-    static @NotNull SoundCategory toVanilla(@NotNull PlatformSoundCategory category) {
+    static @NotNull SoundSource toVanilla(@NotNull PlatformSoundCategory category) {
         return switch (category) {
-            case MASTER -> SoundCategory.MASTER;
-            case MUSIC -> SoundCategory.MUSIC;
-            case RECORDS -> SoundCategory.RECORDS;
-            case WEATHER -> SoundCategory.WEATHER;
-            case BLOCKS -> SoundCategory.BLOCKS;
-            case HOSTILE -> SoundCategory.HOSTILE;
-            case NEUTRAL -> SoundCategory.NEUTRAL;
-            case PLAYERS -> SoundCategory.PLAYERS;
-            case AMBIENT -> SoundCategory.AMBIENT;
-            case VOICE -> SoundCategory.VOICE;
+            case MASTER -> SoundSource.MASTER;
+            case MUSIC -> SoundSource.MUSIC;
+            case RECORDS -> SoundSource.RECORDS;
+            case WEATHER -> SoundSource.WEATHER;
+            case BLOCKS -> SoundSource.BLOCKS;
+            case HOSTILE -> SoundSource.HOSTILE;
+            case NEUTRAL -> SoundSource.NEUTRAL;
+            case PLAYERS -> SoundSource.PLAYERS;
+            case AMBIENT -> SoundSource.AMBIENT;
+            case VOICE -> SoundSource.VOICE;
             // No dedicated UI mixer slider exists at this version, so UI sounds ride MASTER.
             // MASTER rather than PLAYERS because a player who mutes "Players" is muting other
             // players, not their own interface feedback.
-            case UI -> SoundCategory.MASTER;
+            case UI -> SoundSource.MASTER;
         };
     }
 
@@ -289,18 +288,18 @@ public final class PlatformPlayer {
         if (server == null) {
             return; // No integrated server (unit tests / between world sessions).
         }
-        final Identifier id = Identifier.of("mcmmo", "milestone/" + path);
-        final AdvancementEntry entry = server.getAdvancementLoader().get(id);
+        final ResourceLocation id = ResourceLocation.fromNamespaceAndPath("mcmmo", "milestone/" + path);
+        final AdvancementHolder entry = server.getAdvancements().get(id);
         if (entry == null) {
             McMMOMod.LOGGER.warn("Milestone advancement '{}' is not loaded; skipping plaque.", id);
             return;
         }
-        final PlayerAdvancementTracker tracker = handle.getAdvancementTracker();
+        final PlayerAdvancements tracker = handle.getAdvancements();
         if (repeatable) {
             // Clear the completion so the re-grant re-shows the toast/plaque.
-            tracker.revokeCriterion(entry, MILESTONE_CRITERION);
+            tracker.revoke(entry, MILESTONE_CRITERION);
         }
-        tracker.grantCriterion(entry, MILESTONE_CRITERION);
+        tracker.award(entry, MILESTONE_CRITERION);
     }
 
     // --- Held items ---------------------------------------------------------
@@ -312,12 +311,12 @@ public final class PlatformPlayer {
      * null) when the hand is empty, matching vanilla {@link net.minecraft.entity.LivingEntity#getMainHandStack()}.
      */
     public @NotNull ItemStack getMainHandStack() {
-        return handle.getMainHandStack();
+        return handle.getMainHandItem();
     }
 
     /** The stack in the off hand (Bukkit {@code getInventory().getItemInOffHand()}); empty when none. */
     public @NotNull ItemStack getOffHandStack() {
-        return handle.getOffHandStack();
+        return handle.getOffhandItem();
     }
 
     // --- Agility fall/roll support (K2) ----------------------------------
@@ -328,8 +327,8 @@ public final class PlatformPlayer {
      * {@code ItemUtils.hasItemInEitherHand(player, Material.ENDER_PEARL)}.
      */
     public boolean hasEnderPearlInEitherHand() {
-        return handle.getMainHandStack().isOf(Items.ENDER_PEARL)
-                || handle.getOffHandStack().isOf(Items.ENDER_PEARL);
+        return handle.getMainHandItem().is(Items.ENDER_PEARL)
+                || handle.getOffhandItem().is(Items.ENDER_PEARL);
     }
 
     /**
@@ -338,7 +337,7 @@ public final class PlatformPlayer {
      * (fall damage while mounted is disallowed for XP).
      */
     public boolean isInsideVehicle() {
-        return handle.hasVehicle();
+        return handle.isPassenger();
     }
 
     /**
@@ -348,10 +347,10 @@ public final class PlatformPlayer {
      * registry; if the enchantment registry is somehow absent the check degrades to {@code false}.
      */
     public boolean hasFeatherFallingBoots() {
-        RegistryEntry<Enchantment> featherFalling = getWorld().getRegistryManager()
-                .get(RegistryKeys.ENCHANTMENT)
-                .getEntry(Enchantments.FEATHER_FALLING).orElseThrow();
-        return EnchantmentHelper.getEquipmentLevel(featherFalling, handle) > 0;
+        Holder<Enchantment> featherFalling = getWorld().registryAccess()
+                .registryOrThrow(net.minecraft.core.registries.Registries.ENCHANTMENT)
+                .getHolder(Enchantments.FEATHER_FALLING).orElseThrow();
+        return EnchantmentHelper.getEnchantmentLevel(featherFalling, handle) > 0;
     }
 
     /**
@@ -359,7 +358,7 @@ public final class PlatformPlayer {
      * Agility fall-location history to throttle repeat XP farming on the same block.
      */
     public long getFeetBlockKey() {
-        return handle.getBlockPos().asLong();
+        return handle.blockPosition().asLong();
     }
 
     // --- Super-ability activation support (K6) ------------------------------
@@ -372,7 +371,7 @@ public final class PlatformPlayer {
      * {@link ToolType}.
      */
     public boolean isHoldingTool(@NotNull ToolType toolType) {
-        return ItemUtils.isToolInHand(toolType, handle.getMainHandStack());
+        return ItemUtils.isToolInHand(toolType, handle.getMainHandItem());
     }
 
     /**
@@ -382,8 +381,8 @@ public final class PlatformPlayer {
      * used for config-named items such as the Blast Mining detonator.
      */
     public boolean isHoldingItem(@NotNull String itemName) {
-        final ItemStack held = handle.getMainHandStack();
-        return Materials.item(itemName).map(held::isOf).orElse(false);
+        final ItemStack held = handle.getMainHandItem();
+        return Materials.item(itemName).map(held::is).orElse(false);
     }
 
     /**
@@ -398,7 +397,7 @@ public final class PlatformPlayer {
      * established shape — see {@link #isHoldingTool} and {@link #isLookingAtTree}.)
      */
     public boolean isUnarmed() {
-        return ItemUtils.isUnarmed(handle.getMainHandStack());
+        return ItemUtils.isUnarmed(handle.getMainHandItem());
     }
 
     /**
@@ -409,7 +408,7 @@ public final class PlatformPlayer {
      * vector; a miss (air / fluid / entity) or a non-tree block yields {@code false}.
      */
     public boolean isLookingAtTree() {
-        HitResult hit = handle.raycast(100.0D, 1.0F, false);
+        HitResult hit = handle.pick(100.0D, 1.0F, false);
         if (hit.getType() != HitResult.Type.BLOCK) {
             return false;
         }
@@ -429,7 +428,7 @@ public final class PlatformPlayer {
      *
      * <p>Legacy wrapped this in its own {@code canMomentumBeApplied} comparison against any Speed the
      * player already had. That check is vanilla's: {@code addStatusEffect} defers to
-     * {@code StatusEffectInstance#upgrade}, which accepts the new effect only when it is stronger, or
+     * {@code MobEffectInstance#upgrade}, which accepts the new effect only when it is stronger, or
      * equally strong and longer (bytecode-verified). Delegating means a spear hit can never downgrade
      * a Speed II potion to a shorter Momentum, and the boolean says whether anything actually
      * happened — so the caller can keep the "MOMENTUM ACTIVATED!" message honest.
@@ -439,7 +438,7 @@ public final class PlatformPlayer {
      * @return {@code true} if the effect was applied or upgraded an existing one
      */
     public boolean applySpeed(int durationTicks, int amplifier) {
-        return handle.addStatusEffect(new StatusEffectInstance(StatusEffects.SPEED, durationTicks,
+        return handle.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SPEED, durationTicks,
                 amplifier));
     }
 
@@ -462,15 +461,15 @@ public final class PlatformPlayer {
      * @param enchantBuff the number of Efficiency levels to add (advanced.yml {@code EnchantBuff})
      */
     public void applySuperAbilityDigBoost(int enchantBuff) {
-        final ItemStack stack = handle.getMainHandStack();
+        final ItemStack stack = handle.getMainHandItem();
         if (!canBeDigBoosted(stack)) {
             return;
         }
-        final RegistryEntry<Enchantment> efficiency = efficiencyEntry();
-        final int originalDigSpeed = EnchantmentHelper.getLevel(efficiency, stack);
-        EnchantmentHelper.apply(stack, builder -> builder.set(efficiency,
+        final Holder<Enchantment> efficiency = efficiencyEntry();
+        final int originalDigSpeed = EnchantmentHelper.getItemEnchantmentLevel(efficiency, stack);
+        EnchantmentHelper.updateEnchantments(stack, builder -> builder.set(efficiency,
                 originalDigSpeed + enchantBuff));
-        NbtComponent.set(DataComponentTypes.CUSTOM_DATA, stack,
+        CustomData.update(DataComponents.CUSTOM_DATA, stack,
                 nbt -> nbt.putInt(SUPER_ABILITY_BOOST_KEY, originalDigSpeed));
     }
 
@@ -479,7 +478,7 @@ public final class PlatformPlayer {
      * on the held item). Called before (re)activating so a stale boost can't stack its Efficiency.
      */
     public void removeSuperAbilityBoostFromMainHand() {
-        removeSuperAbilityBoostFromStack(handle.getMainHandStack());
+        removeSuperAbilityBoostFromStack(handle.getMainHandItem());
     }
 
     /**
@@ -488,9 +487,9 @@ public final class PlatformPlayer {
      * boosted tool that was moved out of the main hand is still cleaned up.
      */
     public void removeSuperAbilityBoostsFromInventory() {
-        final PlayerInventory inventory = handle.getInventory();
-        for (int slot = 0; slot < inventory.size(); slot++) {
-            removeSuperAbilityBoostFromStack(inventory.getStack(slot));
+        final Inventory inventory = handle.getInventory();
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+            removeSuperAbilityBoostFromStack(inventory.getItem(slot));
         }
     }
 
@@ -515,23 +514,23 @@ public final class PlatformPlayer {
         if (stack.isEmpty() || !canBeDigBoosted(stack)) {
             return;
         }
-        final NbtComponent customData = stack.get(DataComponentTypes.CUSTOM_DATA);
+        final CustomData customData = stack.get(DataComponents.CUSTOM_DATA);
         if (customData == null) {
             return;
         }
-        final NbtCompound nbt = customData.copyNbt();
+        final CompoundTag nbt = customData.copyTag();
         if (!nbt.contains(SUPER_ABILITY_BOOST_KEY)) {
             return; // not a boosted stack.
         }
         final int originalDigSpeed = nbt.getInt(SUPER_ABILITY_BOOST_KEY);
-        final RegistryEntry<Enchantment> efficiency = efficiencyEntry();
+        final Holder<Enchantment> efficiency = efficiencyEntry();
         if (originalDigSpeed > 0) {
-            EnchantmentHelper.apply(stack, builder -> builder.set(efficiency, originalDigSpeed));
+            EnchantmentHelper.updateEnchantments(stack, builder -> builder.set(efficiency, originalDigSpeed));
         } else {
-            EnchantmentHelper.apply(stack,
-                    builder -> builder.remove(entry -> entry.matchesKey(Enchantments.EFFICIENCY)));
+            EnchantmentHelper.updateEnchantments(stack,
+                    builder -> builder.removeIf(entry -> entry.is(Enchantments.EFFICIENCY)));
         }
-        NbtComponent.set(DataComponentTypes.CUSTOM_DATA, stack,
+        CustomData.update(DataComponents.CUSTOM_DATA, stack,
                 marker -> marker.remove(SUPER_ABILITY_BOOST_KEY));
     }
 
@@ -541,16 +540,16 @@ public final class PlatformPlayer {
     }
 
     /** Resolve the {@code Efficiency} enchantment entry from the world's dynamic registry. */
-    private @NotNull RegistryEntry<Enchantment> efficiencyEntry() {
-        return getWorld().getRegistryManager()
-                .get(RegistryKeys.ENCHANTMENT)
-                .getEntry(Enchantments.EFFICIENCY).orElseThrow();
+    private @NotNull Holder<Enchantment> efficiencyEntry() {
+        return getWorld().registryAccess()
+                .registryOrThrow(net.minecraft.core.registries.Registries.ENCHANTMENT)
+                .getHolder(Enchantments.EFFICIENCY).orElseThrow();
     }
 
     // --- Stopgap raw accessors (pending dedicated adapters) ------------------
 
     /** Stopgap: raw vanilla inventory until the ItemStack adapter lands. */
-    public @NotNull PlayerInventory getInventory() {
+    public @NotNull Inventory getInventory() {
         return handle.getInventory();
     }
 }

@@ -4,7 +4,7 @@ import static com.gmail.nossr50.util.text.ConfigStringUtils.getMaterialConfigStr
 
 import com.gmail.nossr50.config.treasure.TreasureConfig;
 import com.gmail.nossr50.datatypes.treasure.ExcavationTreasure;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import java.util.ArrayList;
 import java.util.List;
 import org.jetbrains.annotations.NotNull;

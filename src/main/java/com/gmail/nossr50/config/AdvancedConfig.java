@@ -2,7 +2,7 @@ package com.gmail.nossr50.config;
 
 import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.skills.SubSkillType;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.skills.movement.Medium;
 import com.gmail.nossr50.util.text.StringUtils;
 import com.gmail.nossr50.skills.hunter.HunterManager;

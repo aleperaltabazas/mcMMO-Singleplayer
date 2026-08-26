@@ -2,7 +2,7 @@ package com.gmail.nossr50.datatypes.skills.alchemy;
 
 import static java.util.Objects.requireNonNull;
 
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformItem;
 import com.gmail.nossr50.platform.Potions;
 import java.util.Map;

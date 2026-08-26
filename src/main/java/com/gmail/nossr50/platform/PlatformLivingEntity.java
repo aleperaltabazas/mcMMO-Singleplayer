@@ -5,20 +5,20 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.item.ItemStack;
-import net.minecraft.network.packet.s2c.play.PositionFlag;
-import net.minecraft.registry.Registries;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.World;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.RelativeMovement;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -55,8 +55,8 @@ public final class PlatformLivingEntity {
     }
 
     /** Registry id of the entity type, for name-based comparisons (e.g. {@code minecraft:zombie}). */
-    public @NotNull Identifier getTypeId() {
-        return Registries.ENTITY_TYPE.getId(handle.getType());
+    public @NotNull ResourceLocation getTypeId() {
+        return BuiltInRegistries.ENTITY_TYPE.getKey(handle.getType());
     }
 
     // --- State --------------------------------------------------------------
@@ -85,7 +85,7 @@ public final class PlatformLivingEntity {
     }
 
     public @NotNull UUID getUniqueId() {
-        return handle.getUuid();
+        return handle.getUUID();
     }
 
     /**
@@ -93,7 +93,7 @@ public final class PlatformLivingEntity {
      * flames on a burning wolf. Vanilla's own {@code extinguish()} is exactly that assignment.
      */
     public void extinguish() {
-        handle.extinguish();
+        handle.extinguishFire();
     }
 
     // --- Status effects (Bukkit addPotionEffect/getPotionEffect) ------------
@@ -104,7 +104,7 @@ public final class PlatformLivingEntity {
      * Cripple on an already-slowed target.
      */
     public boolean hasSlowness() {
-        return handle.hasStatusEffect(StatusEffects.SLOWNESS);
+        return handle.hasEffect(MobEffects.MOVEMENT_SLOWDOWN);
     }
 
     /**
@@ -115,7 +115,7 @@ public final class PlatformLivingEntity {
      * @param amplifier     effect level, zero-based (Bukkit's amplifier, so {@code 1} is Slowness II)
      */
     public void applySlowness(int durationTicks, int amplifier) {
-        handle.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, durationTicks,
+        handle.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, durationTicks,
                 amplifier));
     }
 
@@ -146,7 +146,7 @@ public final class PlatformLivingEntity {
             if (slot.getType() != EquipmentSlot.Type.HUMANOID_ARMOR) {
                 continue;
             }
-            final ItemStack stack = handle.getEquippedStack(slot);
+            final ItemStack stack = handle.getItemBySlot(slot);
             if (!stack.isEmpty() && ItemUtils.isArmor(stack)) {
                 pieces.add(new PlatformItem(stack));
             }
@@ -179,7 +179,7 @@ public final class PlatformLivingEntity {
     public static boolean isUnarmored(@NotNull LivingEntity entity) {
         for (EquipmentSlot slot : EquipmentSlot.values()) {
             if (slot.getType() == EquipmentSlot.Type.HUMANOID_ARMOR
-                    && !entity.getEquippedStack(slot).isEmpty()) {
+                    && !entity.getItemBySlot(slot).isEmpty()) {
                 return false;
             }
         }
@@ -194,7 +194,7 @@ public final class PlatformLivingEntity {
      * .multiply(m))} — Axes' Greater Impact knockback (the source is the attacking player).
      *
      * <p>Unlike {@code LivingEntity#takeKnockback} this overwrites the velocity outright and ignores
-     * knockback resistance, matching what {@code setVelocity} did. {@code velocityDirty} is raised so
+     * knockback resistance, matching what {@code setVelocity} did. {@code hasImpulse} is raised so
      * the change is sent to clients this tick rather than only surfacing as position drift.
      */
     public void setVelocityAlongLookDirection(@NotNull PlatformPlayer source, double multiplier) {
@@ -212,8 +212,8 @@ public final class PlatformLivingEntity {
     }
 
     private void flingAlong(@NotNull Entity source, double multiplier) {
-        handle.setVelocity(source.getRotationVector().normalize().multiply(multiplier));
-        handle.velocityDirty = true;
+        handle.setDeltaMovement(source.getLookAngle().normalize().scale(multiplier));
+        handle.hasImpulse = true;
     }
 
     // --- Teleport (Bukkit Entity#teleport) ----------------------------------
@@ -226,32 +226,32 @@ public final class PlatformLivingEntity {
      * teleporting to the owner's full {@code Location} did.
      */
     public void teleportTo(@NotNull PlatformPlayer owner) {
-        final Vec3d dest = owner.getPos();
-        handle.teleport(owner.getWorld(), dest.x, dest.y, dest.z,
-                EnumSet.noneOf(PositionFlag.class), handle.getYaw(), handle.getPitch());
+        final Vec3 dest = owner.getPos();
+        handle.teleportTo(owner.getWorld(), dest.x, dest.y, dest.z,
+                EnumSet.noneOf(RelativeMovement.class), handle.getYRot(), handle.getXRot());
     }
 
-    // --- World / position (Bukkit getLocation/getWorld) ---------------------
+    // --- Level / position (Bukkit getLocation/getWorld) ---------------------
 
-    public @NotNull World getWorld() {
-        return handle.getEntityWorld();
+    public @NotNull Level getWorld() {
+        return handle.getCommandSenderWorld();
     }
 
     public @NotNull BlockPos getBlockPos() {
-        return handle.getBlockPos();
+        return handle.blockPosition();
     }
 
-    public @NotNull Vec3d getPos() {
-        return handle.getPos();
+    public @NotNull Vec3 getPos() {
+        return handle.position();
     }
 
     // --- Custom name --------------------------------------------------------
 
-    public @Nullable Text getCustomName() {
+    public @Nullable Component getCustomName() {
         return handle.getCustomName();
     }
 
-    public void setCustomName(@Nullable Text name) {
+    public void setCustomName(@Nullable Component name) {
         handle.setCustomName(name);
     }
 

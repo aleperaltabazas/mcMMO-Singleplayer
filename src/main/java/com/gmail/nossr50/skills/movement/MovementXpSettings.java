@@ -1,7 +1,7 @@
 package com.gmail.nossr50.skills.movement;
 
 import com.gmail.nossr50.config.experience.ExperienceConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.skills.SpeedNormalisedXp;
 import java.util.EnumMap;
 import java.util.Map;

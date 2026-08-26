@@ -2,9 +2,9 @@ package com.gmail.nossr50.platform;
 
 import com.gmail.nossr50.config.GeneralConfig;
 import com.gmail.nossr50.datatypes.skills.ToolType;
-import com.gmail.nossr50.fabric.McMMOMod;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
+import com.gmail.nossr50.neoforge.McMMOMod;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.core.registries.BuiltInRegistries;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -12,7 +12,7 @@ import org.jetbrains.annotations.NotNull;
  *
  * <p>Every check here is a thin, MC-typed wrapper over the already-unit-tested, MC-free
  * {@link com.gmail.nossr50.util.MaterialMapStore} (see memory {@code phase-10-9} keystone): it extracts the item's vanilla
- * registry-id path (e.g. {@code diamond_axe}) via {@link Registries#ITEM} and delegates the actual
+ * registry-id path (e.g. {@code diamond_axe}) via {@link BuiltInRegistries#ITEM} and delegates the actual
  * set membership to the store. So the classification <em>logic</em> is proven MC-free in
  * {@code MaterialMapStoreTest}; this layer only bridges a live {@link ItemStack} to that logic. The
  * id-path extraction needs live registries, so these are exercised in {@code ItemUtilsTest} under the
@@ -37,7 +37,7 @@ public final class ItemUtils {
      * is {@code minecraft:air}, i.e. path {@code air}, which is in none of the tool/armor sets.
      */
     private static @NotNull String idPath(@NotNull ItemStack item) {
-        return Registries.ITEM.getId(item.getItem()).getPath();
+        return BuiltInRegistries.ITEM.getKey(item.getItem()).getPath();
     }
 
     // --- Weapons ------------------------------------------------------------
