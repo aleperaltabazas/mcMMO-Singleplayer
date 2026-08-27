@@ -557,7 +557,7 @@ public final class PlayerMovementTracker {
             return;
         }
         if (!player.level().isDay()
-                || !player.level().canSeeSky(player.blockPosition())) {
+                || !player.level().canSeeSkyFromBelowWater(player.blockPosition())) {
             return; // Keep the counter: stepping through a tunnel shouldn't reset the progress.
         }
 
