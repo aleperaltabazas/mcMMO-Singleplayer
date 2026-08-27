@@ -1,3 +1,10 @@
+> **NeoForge branch notice:** This `neoforge/1.21.1` branch targets **NeoForge 21.1.x for Minecraft
+> 1.21.1**, not Fabric. Everything below this notice — the loader, requirements table, install
+> steps, and `fabric.mod.json` references — describes the Fabric branch and does **not** apply
+> here: following it with this branch's jar will produce a mod that fails to load. Full NeoForge
+> documentation for this branch is pending (tracked as follow-up work); until then, see
+> `src/main/java/com/gmail/nossr50/neoforge/` for the current entry point and wiring.
+
 # mcMMO‑SP — Single‑Player Fabric Port
 
 A port of **[mcMMO](https://github.com/mcMMO-Dev/mcMMO)** from a Bukkit/Spigot server plugin to a
