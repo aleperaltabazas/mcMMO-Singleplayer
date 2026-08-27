@@ -95,8 +95,12 @@ public final class McMMOCommands {
      * The gate on every command that hands out progress or removes a cost — level 2, the same level
      * vanilla puts {@code /gamemode} and {@code /give} behind (GitHub #8).
      *
-     * <p>Package-private so {@code McMMOCommandsTest} can assert <em>which</em> commands carry it.
-     * Brigadier stores the predicate instance it is handed, so that test compares the same object.
+     * <p>Package-private (not {@code private}) so a same-package test could assert <em>which</em>
+     * commands carry it by identity — Brigadier stores the predicate instance it is handed, so such
+     * a test would compare the same object. No such test exists on this branch yet (the Fabric-era
+     * {@code McMMOCommandsTest} that once did this was deleted with the rest of {@code fabric/}'s
+     * tests and has not been re-created); the visibility is kept package-private in anticipation of
+     * one, not because anything currently reads it from outside this class.
      *
      * <p>⚠️ <b>Declared as a plain {@link java.util.function.Predicate}, deliberately.</b> Minecraft
      * reworked the command permission API more than once, and the helper that builds this predicate
@@ -158,9 +162,11 @@ public final class McMMOCommands {
      * Every command this class registers, and whether it needs the {@link #CHEAT_COMMAND} gate.
      *
      * <p>Exists so the audit is a data structure a test can walk rather than six registration calls
-     * somebody has to re-read. Adding a command without adding it here fails
-     * {@code McMMOCommandsTest#everyRegisteredCommandIsAccountedFor} — which is the point: GitHub #8
-     * happened because a cheat command was registered and nobody re-checked the list.
+     * somebody has to re-read, so that adding a command without adding it here can be caught by a
+     * test asserting every registered command is accounted for. No such test exists on this branch
+     * yet (the Fabric-era {@code McMMOCommandsTest} that once did this was deleted with the rest of
+     * {@code fabric/}'s tests and has not been re-created) — this method exists in anticipation of
+     * one. GitHub #8 happened because a cheat command was registered and nobody re-checked the list.
      */
     static @NotNull Map<String, String> retiredSkills() {
         return RETIRED_SKILLS;
