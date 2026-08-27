@@ -14,41 +14,7 @@ repositories {
     mavenCentral() // JUnit (and future plain-Java test/util deps)
 }
 
-// -----------------------------------------------------------------------------
-// Incremental migration note.
-//
-// This branch (neoforge/1.21.1) is being ported package-by-package from the Fabric/Loom
-// build on mc/1.21.1 per docs/superpowers/plans/2026-08-26-neoforge-port-phase1-plan.md.
-// `com/gmail/nossr50/fabric/**` (including `fabric/commands/`) still references net.fabricmc
-// APIs that are not on the classpath under ModDevGradle, so it remains EXCLUDED here pending
-// its own deletion task (Task 8, once neoforge/ replaces it).
-//
-// Task 3 re-mapped `com/gmail/nossr50/platform/**` (and its `scheduler/`, `skills/`, `text/`
-// subpackages) to NeoForge's official Minecraft mappings. `platform/` and the core-gameplay
-// layer are mutually dependent -- platform/ files import core datatypes and the core layer
-// imports platform/ interfaces -- so they cannot compile in isolation from each other. This
-// include list therefore widens in the same step to cover every core-gameplay package platform/
-// files transitively touch: skills/, datatypes/, util/, commands/ (fabric/commands/ is a
-// separate path under fabric/, not under commands/, so excluding fabric/** already keeps it
-// out), config/, runnables/, event/, database/, locale/. Only `com/gmail/nossr50/fabric/**`
-// remains excluded now, pending its own deletion task.
-// -----------------------------------------------------------------------------
 sourceSets {
-    main {
-        java {
-            include 'com/gmail/nossr50/neoforge/**'
-            include 'com/gmail/nossr50/platform/**'
-            include 'com/gmail/nossr50/skills/**'
-            include 'com/gmail/nossr50/datatypes/**'
-            include 'com/gmail/nossr50/util/**'
-            include 'com/gmail/nossr50/commands/**'
-            include 'com/gmail/nossr50/config/**'
-            include 'com/gmail/nossr50/runnables/**'
-            include 'com/gmail/nossr50/event/**'
-            include 'com/gmail/nossr50/database/**'
-            include 'com/gmail/nossr50/locale/**'
-        }
-    }
     // Task 8: src/test/java compiles against real Minecraft types (McTestRegistries and dozens of
     // unit tests mock/exercise net.minecraft.* classes directly, official-mapped). The NeoForge
     // ModDevGradle plugin wires the Minecraft/NeoForge dependency graph onto sourceSets.main's own
