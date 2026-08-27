@@ -65,12 +65,60 @@ sourceSets {
 
 neoForge {
     version = project.neo_version
+
+    // Task 9: `./gradlew tasks --all` showed no runServer/runClient tasks -- ModDevGradle only
+    // generates run tasks for runs declared here, unlike Loom which ships a default runServer/
+    // runClient out of the box. This block was never added on this branch (Tasks 1-8 only needed
+    // compileJava/test, not a bootable dev server), so Task 9's own Step 3 (boot a dedicated
+    // server) had no task to run. Declaring the mod's sourceSet under `mods {}` wires this jar's
+    // classes/resources onto the run's classpath so NeoForge actually loads mcmmo, not just
+    // vanilla + NeoForge.
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+        }
+        data {
+            data()
+        }
+        // The dev runs above load mcmmo's classes/resources straight from sourceSets.main
+        // (unpacked), not from the packaged+JiJ jar -- so `jarJar` embedding (which only takes
+        // effect once NeoForge scans an actual packaged mod jar for nested jars) does nothing
+        // for these runs. snakeyaml is an `implementation` dependency, not a `jarJar`-only one,
+        // but plain `implementation` deps are still not visible to the mod's isolated
+        // classloader at dev-run time (confirmed: they're absent from
+        // build/moddev/serverLegacyClasspath.txt) -- only what's declared here on
+        // additionalRuntimeClasspathConfiguration is. Reusing the `jarJar` configuration as the
+        // source keeps one list of "runtime libraries mcmmo needs beyond NeoForge itself" instead
+        // of maintaining it twice.
+        configureEach {
+            additionalRuntimeClasspathConfiguration.extendsFrom(configurations.jarJar)
+        }
+    }
+
+    mods {
+        mcmmo {
+            sourceSet sourceSets.main
+        }
+    }
 }
 
 dependencies {
     // YAML config backend. mcMMO's configs are .yml (ported from Bukkit's YamlConfiguration);
     // snakeyaml replaces that engine.
+    //
+    // Task 9: runServer crashed at "mcMMO enabling for server session" with
+    // NoClassDefFoundError: org/yaml/snakeyaml/Yaml. Root cause: NeoForge loads each mod in its
+    // own isolated module-path classloader, and a plain Gradle `implementation` dependency is
+    // NOT put on that classloader's view -- only the mod's own classes/resources and anything
+    // explicitly Jar-in-Jar'd (the `jarJar` configuration) are. This is not a dev-run-only quirk;
+    // a real installed jar would hit the exact same NoClassDefFoundError at runtime, so `jarJar`
+    // (embedding snakeyaml inside the shipped mod jar) is the actual fix, not a test-harness
+    // workaround.
     implementation "org.yaml:snakeyaml:${project.snakeyaml_version}"
+    jarJar "org.yaml:snakeyaml:${project.snakeyaml_version}"
 
     // Unit tests for MC-free code (the platform/ + event/ + skill-manager + config layers).
     testImplementation platform("org.junit:junit-bom:${project.junit_version}")
