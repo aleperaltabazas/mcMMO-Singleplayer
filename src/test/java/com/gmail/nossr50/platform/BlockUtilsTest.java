@@ -10,19 +10,19 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.gmail.nossr50.config.experience.ExperienceConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.BlockUtils.AgeableState;
 import com.gmail.nossr50.util.BlockRules;
 import com.gmail.nossr50.util.McTestRegistries;
 import java.nio.file.Path;
 import java.util.function.BooleanSupplier;
 import java.util.List;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.state.property.Properties;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,7 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Exercises the MC-typed {@link BlockUtils} bridge against real vanilla
- * {@link net.minecraft.block.Block}s. Its one job since the Phase 2 extraction is to prove the
+ * {@link net.minecraft.world.level.block.Block}s. Its one job since the Phase 2 extraction is to prove the
  * <b>key extraction connects</b>:
  *
  * <ul>
@@ -39,7 +39,7 @@ import org.junit.jupiter.api.io.TempDir;
  *       {@link BlockRules} (and behind it {@link com.gmail.nossr50.util.MaterialMapStore} and the
  *       {@code experience.yml} tables) are keyed on — asserted in {@code BlockRulesTest} against
  *       hand-written literals, so if the two ever disagree, one of these files goes red;</li>
- *   <li>a {@link World} + {@link BlockPos} packs into the tracker keys the rules layer expects;</li>
+ *   <li>a {@link Level} + {@link BlockPos} packs into the tracker keys the rules layer expects;</li>
  *   <li>the three things that could not be extracted still behave — the two block-identity checks,
  *       crop maturity, and the Hylian tag laziness.</li>
  * </ul>
@@ -82,7 +82,7 @@ class BlockUtilsTest {
         assertTrue(BlockUtils.canActivateAbilities(Blocks.STONE));
         assertTrue(BlockUtils.canActivateTools(Blocks.STONE));
         // A BlockState overload resolves to the same answer as its Block.
-        assertTrue(BlockUtils.canActivateAbilities(Blocks.STONE.getDefaultState()));
+        assertTrue(BlockUtils.canActivateAbilities(Blocks.STONE.defaultBlockState()));
 
         assertTrue(BlockUtils.isNonWoodPartOfTree(Blocks.OAK_LEAVES));
         assertFalse(BlockUtils.isNonWoodPartOfTree(Blocks.OAK_LOG));
@@ -119,9 +119,9 @@ class BlockUtilsTest {
     void berserkInstaBreaksTheSnowLayerByIdentity() {
         // This arm cannot live in BlockRules: it is `isOf(Blocks.SNOW)`, an identity comparison, and
         // "snow".equals(idPath) would also match another namespace's block called snow.
-        assertTrue(BlockUtils.affectedByBerserk(Blocks.SNOW.getDefaultState()), "the snow layer");
-        assertTrue(BlockUtils.affectedByBerserk(Blocks.GLASS.getDefaultState()), "the glass arm");
-        assertFalse(BlockUtils.affectedByBerserk(Blocks.STONE.getDefaultState()));
+        assertTrue(BlockUtils.affectedByBerserk(Blocks.SNOW.defaultBlockState()), "the snow layer");
+        assertTrue(BlockUtils.affectedByBerserk(Blocks.GLASS.defaultBlockState()), "the glass arm");
+        assertFalse(BlockUtils.affectedByBerserk(Blocks.STONE.defaultBlockState()));
     }
 
     // --- Identity check #2: obsidian's lava-gate exemption -------------------
@@ -131,7 +131,7 @@ class BlockUtilsTest {
         // Making obsidian consumes the lava source, so it cannot repeat without another bucket --
         // it is a trade, not a generator. Legacy exempts it by name and so do we, by identity: the
         // exemption sits on this side of the boundary for the same reason the snow arm does.
-        final World world = overworld();
+        final Level world = overworld();
         final BlockPos pos = new BlockPos(1, 30, 0);
         BlockUtils.markLavaFormed(world, pos, Blocks.OBSIDIAN);
         assertFalse(BlockUtils.isRewardIneligible(world, pos));
@@ -149,11 +149,11 @@ class BlockUtilsTest {
     void classifiesHylianTreasureGroupsFromHardcodedMembers() {
         // Only the MaterialMapStore-backed branches are reachable here -- the nine flowers and the
         // three non-tag bush blocks -- because each returns before any tag check.
-        assertEquals("Flowers", BlockUtils.getHylianTreasureGroup(Blocks.POPPY.getDefaultState()));
-        assertEquals("Bushes", BlockUtils.getHylianTreasureGroup(Blocks.FERN.getDefaultState()));
+        assertEquals("Flowers", BlockUtils.getHylianTreasureGroup(Blocks.POPPY.defaultBlockState()));
+        assertEquals("Bushes", BlockUtils.getHylianTreasureGroup(Blocks.FERN.defaultBlockState()));
         assertEquals("Bushes",
-                BlockUtils.getHylianTreasureGroup(Blocks.SHORT_GRASS.getDefaultState()));
-        assertEquals("Bushes", BlockUtils.getHylianTreasureGroup(Blocks.DEAD_BUSH.getDefaultState()));
+                BlockUtils.getHylianTreasureGroup(Blocks.SHORT_GRASS.defaultBlockState()));
+        assertEquals("Bushes", BlockUtils.getHylianTreasureGroup(Blocks.DEAD_BUSH.defaultBlockState()));
     }
 
     /**
@@ -202,20 +202,20 @@ class BlockUtilsTest {
     @Test
     void getAgeableStateReadsCropAgeAndMax() {
         // Wheat's age property maxes at 7; a freshly-planted crop is age 0.
-        AgeableState freshWheat = BlockUtils.getAgeableState(Blocks.WHEAT.getDefaultState());
+        AgeableState freshWheat = BlockUtils.getAgeableState(Blocks.WHEAT.defaultBlockState());
         assertNotNull(freshWheat);
         assertEquals(0, freshWheat.age());
         assertEquals(7, freshWheat.maxAge());
 
         AgeableState grownWheat =
-                BlockUtils.getAgeableState(Blocks.WHEAT.getDefaultState().with(Properties.AGE_7, 7));
+                BlockUtils.getAgeableState(Blocks.WHEAT.defaultBlockState().setValue(BlockStateProperties.AGE_7, 7));
         assertNotNull(grownWheat);
         assertEquals(7, grownWheat.age());
         assertEquals(7, grownWheat.maxAge());
 
         // Sweet berry bush maxes at 3.
         AgeableState berries = BlockUtils.getAgeableState(
-                Blocks.SWEET_BERRY_BUSH.getDefaultState().with(Properties.AGE_3, 2));
+                Blocks.SWEET_BERRY_BUSH.defaultBlockState().setValue(BlockStateProperties.AGE_3, 2));
         assertNotNull(berries);
         assertEquals(2, berries.age());
         assertEquals(3, berries.maxAge());
@@ -224,52 +224,52 @@ class BlockUtilsTest {
     @Test
     void getAgeableStateIsNullForBlocksWithoutAnAgeProperty() {
         // Stone has no state properties at all; a log has only an axis, not age.
-        assertNull(BlockUtils.getAgeableState(Blocks.STONE.getDefaultState()));
-        assertNull(BlockUtils.getAgeableState(Blocks.OAK_LOG.getDefaultState()));
+        assertNull(BlockUtils.getAgeableState(Blocks.STONE.defaultBlockState()));
+        assertNull(BlockUtils.getAgeableState(Blocks.OAK_LOG.defaultBlockState()));
     }
 
     @Test
     void withAgeSetsCropAgeClampsAndPreservesOtherProperties() {
         // Re-age wheat (age 0-7) to 3 — the Green Thumb replant path.
         AgeableState wheat3 = BlockUtils.getAgeableState(
-                BlockUtils.withAge(Blocks.WHEAT.getDefaultState(), 3));
+                BlockUtils.withAge(Blocks.WHEAT.defaultBlockState(), 3));
         assertNotNull(wheat3);
         assertEquals(3, wheat3.age());
 
         // An age above the crop's maximum clamps to it, so BlockState#with never throws (a high
         // Green Thumb stage against a short crop).
         AgeableState wheatOver = BlockUtils.getAgeableState(
-                BlockUtils.withAge(Blocks.WHEAT.getDefaultState(), 99));
+                BlockUtils.withAge(Blocks.WHEAT.defaultBlockState(), 99));
         assertNotNull(wheatOver);
         assertEquals(7, wheatOver.age());
 
         // Cocoa's age maxes at 2 and its facing must survive the re-age (the record-preserved
         // property the AFTER-seam replant relies on instead of a Directional rebuild).
-        BlockState cocoa = Blocks.COCOA.getDefaultState()
-                .with(Properties.HORIZONTAL_FACING, Direction.SOUTH);
+        BlockState cocoa = Blocks.COCOA.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.SOUTH);
         BlockState cocoa1 = BlockUtils.withAge(cocoa, 1);
         AgeableState cocoaState = BlockUtils.getAgeableState(cocoa1);
         assertNotNull(cocoaState);
         assertEquals(1, cocoaState.age());
-        assertEquals(Direction.SOUTH, cocoa1.get(Properties.HORIZONTAL_FACING));
+        assertEquals(Direction.SOUTH, cocoa1.getValue(BlockStateProperties.HORIZONTAL_FACING));
 
         // A block with no age property is returned unchanged.
-        assertEquals(Blocks.STONE.getDefaultState(),
-                BlockUtils.withAge(Blocks.STONE.getDefaultState(), 3));
+        assertEquals(Blocks.STONE.defaultBlockState(),
+                BlockUtils.withAge(Blocks.STONE.defaultBlockState(), 3));
     }
 
-    // --- The (World, BlockPos) -> tracker-key bridge -------------------------
+    // --- The (Level, BlockPos) -> tracker-key bridge -------------------------
 
     /** A world that answers only the one question the tracker asks it: which world am I? */
-    private static World overworld() {
-        final World world = mock(World.class);
-        when(world.getRegistryKey()).thenReturn(World.OVERWORLD);
+    private static Level overworld() {
+        final Level world = mock(Level.class);
+        when(world.dimension()).thenReturn(Level.OVERWORLD);
         return world;
     }
 
     @Test
     void aWorldAndPositionPackIntoTheKeysTheRulesLayerUses() {
-        final World world = overworld();
+        final Level world = overworld();
         final BlockPos pos = new BlockPos(10, 64, -20);
 
         assertFalse(BlockUtils.isRewardIneligible(world, pos), "a never-placed block is eligible");
@@ -290,9 +290,9 @@ class BlockUtilsTest {
         // BlockRules takes movedFrom/movedTo already packed, so offsetting by the push direction is
         // the one piece of this mechanic still on the MC side -- and therefore the one piece
         // BlockRulesTest cannot cover.
-        final World world = overworld();
+        final Level world = overworld();
         final BlockPos from = new BlockPos(0, 64, 0);
-        final BlockPos to = from.offset(Direction.EAST);
+        final BlockPos to = from.relative(Direction.EAST);
         BlockUtils.markPlaced(world, from);
 
         BlockUtils.movePlacedFlags(world, List.of(from), List.of(), Direction.EAST);
@@ -303,7 +303,7 @@ class BlockUtilsTest {
         // Every other neighbour must be untouched, or the offset is right by accident.
         for (Direction other : Direction.values()) {
             if (other != Direction.EAST) {
-                assertFalse(BlockUtils.isRewardIneligible(world, from.offset(other)),
+                assertFalse(BlockUtils.isRewardIneligible(world, from.relative(other)),
                         "the flag went " + other + " as well as EAST");
             }
         }
@@ -311,7 +311,7 @@ class BlockUtilsTest {
 
     @Test
     void aBlockDestroyedByThePushLosesItsFlag() {
-        final World world = overworld();
+        final Level world = overworld();
         final BlockPos broken = new BlockPos(9, 64, 9);
         BlockUtils.markPlaced(world, broken);
 

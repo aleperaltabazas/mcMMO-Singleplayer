@@ -7,9 +7,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.UUID;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.sound.SoundCategory;
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -18,14 +18,14 @@ import org.junit.jupiter.api.Test;
  *
  * <p>A {@link PlatformPlayer} is built once per login and handed to the player's {@code McMMOPlayer},
  * every skill manager, and every scheduled ability task. But vanilla's
- * {@code PlayerManager#respawnPlayer} does not reuse the {@link ServerPlayerEntity}: it calls
+ * {@code PlayerManager#respawnPlayer} does not reuse the {@link ServerPlayer}: it calls
  * {@code ServerWorld.removePlayer(old, reason)} and constructs a replacement (bytecode-verified
  * against 1.21.11), on both the death path and the End-exit path. Without a rebind, every MC-typed
  * call for the rest of the session — sounds, notifications, main-hand reads, the Super/Giga Breaker
  * dig-boost sweep — targets a removed entity and silently does nothing.
  *
  * <p>Runs under the {@code fabric-loader-junit} registry harness because mocking a
- * {@link ServerPlayerEntity} loads the entity class hierarchy.
+ * {@link ServerPlayer} loads the entity class hierarchy.
  */
 class PlatformPlayerTest {
 
@@ -37,10 +37,10 @@ class PlatformPlayerTest {
         com.gmail.nossr50.util.McTestRegistries.bootstrap();
     }
 
-    private static ServerPlayerEntity entity(UUID uuid, String name) {
-        final ServerPlayerEntity handle = mock(ServerPlayerEntity.class);
-        when(handle.getUuid()).thenReturn(uuid);
-        when(handle.getName()).thenReturn(Text.literal(name));
+    private static ServerPlayer entity(UUID uuid, String name) {
+        final ServerPlayer handle = mock(ServerPlayer.class);
+        when(handle.getUUID()).thenReturn(uuid);
+        when(handle.getName()).thenReturn(Component.literal(name));
         return handle;
     }
 
@@ -49,7 +49,7 @@ class PlatformPlayerTest {
      * {@link PlatformSoundCategory} meets vanilla's enum (Phase 2 of multi-version support).
      *
      * <p>The mapping is eleven hand-written switch arms, and a copy-paste slip in any one of them
-     * (say {@code case VOICE -> SoundCategory.AMBIENT}) is completely silent: the sound still plays,
+     * (say {@code case VOICE -> SoundSource.AMBIENT}) is completely silent: the sound still plays,
      * just on the wrong volume slider, which no other test and no boot check would notice.
      *
      * <p>So this asserts the <em>property</em> rather than re-listing the table: every platform
@@ -59,7 +59,7 @@ class PlatformPlayerTest {
      *
      * <h2>⚠️ Not every band has every category, and skipping is how this would go vacuous</h2>
      * The mirror enum is a superset: a category vanilla adds later has no same-name constant on an
-     * older band, so a blanket {@code SoundCategory.valueOf(name)} throws rather than failing an
+     * older band, so a blanket {@code SoundSource.valueOf(name)} throws rather than failing an
      * assertion. Those constants are covered by
      * {@link #aCategoryVanillaLacksFallsBackDeliberatelyRatherThanSilently} instead — and the count
      * check below is what stops "skip the ones vanilla lacks" from quietly becoming "skip
@@ -69,24 +69,24 @@ class PlatformPlayerTest {
     void everyPlatformSoundCategoryMapsToTheVanillaConstantOfTheSameName() {
         int matchedByName = 0;
         for (final PlatformSoundCategory category : PlatformSoundCategory.values()) {
-            final SoundCategory vanilla;
+            final SoundSource vanilla;
             try {
-                vanilla = SoundCategory.valueOf(category.name());
+                vanilla = SoundSource.valueOf(category.name());
             } catch (IllegalArgumentException absentOnThisBand) {
                 continue;
             }
             matchedByName++;
             assertSame(vanilla, PlatformPlayer.toVanilla(category),
                     "PlatformSoundCategory." + category.name()
-                            + " must map to vanilla SoundCategory." + category.name()
+                            + " must map to vanilla SoundSource." + category.name()
                             + " — a mis-mapped arm silently plays mcMMO's sounds on the wrong "
                             + "volume slider");
         }
 
         // The non-vacuity guard. Without it, a mirror enum that had drifted entirely out of step
         // would skip every constant and this test would pass having asserted nothing.
-        assertEquals(SoundCategory.values().length, matchedByName,
-                "every vanilla SoundCategory must have been reached by name — if this drops, the "
+        assertEquals(SoundSource.values().length, matchedByName,
+                "every vanilla SoundSource must have been reached by name — if this drops, the "
                         + "loop above is skipping constants rather than checking them");
     }
 
@@ -108,12 +108,12 @@ class PlatformPlayerTest {
     void aCategoryVanillaLacksFallsBackDeliberatelyRatherThanSilently() {
         for (final PlatformSoundCategory category : PlatformSoundCategory.values()) {
             try {
-                SoundCategory.valueOf(category.name());
+                SoundSource.valueOf(category.name());
                 continue; // Vanilla has it; the same-name test owns this one.
             } catch (IllegalArgumentException absentOnThisBand) {
                 // Fall through: this is a category this band's Minecraft does not have.
             }
-            assertSame(SoundCategory.MASTER, PlatformPlayer.toVanilla(category),
+            assertSame(SoundSource.MASTER, PlatformPlayer.toVanilla(category),
                     "PlatformSoundCategory." + category.name() + " has no vanilla constant on this "
                             + "band and must fall back to MASTER — PLAYERS would let a player who "
                             + "muted other players also mute mcMMO's own feedback");
@@ -128,18 +128,18 @@ class PlatformPlayerTest {
      * from skill code without anything failing.
      */
     @Test
-    void theMirrorEnumCoversEveryVanillaSoundCategory() {
-        for (final SoundCategory vanilla : SoundCategory.values()) {
+    void theMirrorEnumCoversEveryVanillaSoundSource() {
+        for (final SoundSource vanilla : SoundSource.values()) {
             assertDoesNotThrow(() -> PlatformSoundCategory.valueOf(vanilla.name()),
-                    "vanilla SoundCategory." + vanilla.name()
+                    "vanilla SoundSource." + vanilla.name()
                             + " has no PlatformSoundCategory mirror — skill code cannot name it");
         }
     }
 
     @Test
     void rebindSwapsInTheReplacementEntityForTheSamePlayer() {
-        final ServerPlayerEntity beforeDeath = entity(PLAYER_ID, "Steve");
-        final ServerPlayerEntity afterRespawn = entity(PLAYER_ID, "Steve");
+        final ServerPlayer beforeDeath = entity(PLAYER_ID, "Steve");
+        final ServerPlayer afterRespawn = entity(PLAYER_ID, "Steve");
         final PlatformPlayer player = new PlatformPlayer(beforeDeath);
 
         player.rebind(afterRespawn);
@@ -163,7 +163,7 @@ class PlatformPlayerTest {
 
     @Test
     void rebindRefusesAnEntityBelongingToADifferentPlayer() {
-        final ServerPlayerEntity original = entity(PLAYER_ID, "Steve");
+        final ServerPlayer original = entity(PLAYER_ID, "Steve");
         final PlatformPlayer player = new PlatformPlayer(original);
 
         player.rebind(entity(OTHER_ID, "Alex"));

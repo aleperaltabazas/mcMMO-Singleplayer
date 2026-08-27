@@ -1,12 +1,21 @@
 package com.gmail.nossr50.util;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import net.minecraft.SharedConstants;
-import net.minecraft.server.Bootstrap;
+import net.minecraft.core.MappedRegistry;
+import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.Bootstrap;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.ai.attributes.Attribute;
+import net.minecraft.world.entity.ai.attributes.RangedAttribute;
 import net.minecraft.world.item.Item;
+import net.neoforged.fml.loading.LoadingModList;
+import net.neoforged.neoforge.common.BooleanAttribute;
+import net.neoforged.neoforge.common.PercentageAttribute;
 
 /**
  * Shared one-time Minecraft bootstrap for unit tests that touch live vanilla registries (item/block
@@ -17,6 +26,53 @@ import net.minecraft.world.item.Item;
  * /{@code net.minecraft.SharedConstants}, not Fabric Loom's yarn-mapped equivalents) as part of the
  * fabric/-deletion test-suite fix. Idempotent: {@link Bootstrap#bootStrap()} is itself guarded, and the
  * flag here avoids re-entry.
+ *
+ * <p><b>The {@link LoadingModList#of} call, and why it has to run first:</b> under plain JUnit (no
+ * FML/ModLauncher), {@code LoadingModList.get()} returns {@code null} because nothing ever populated
+ * FML's static mod-list holder — the Fabric original avoided this entirely by running tests under
+ * {@code fabric-loader-junit}, a launcher that boots the real mod loader first. NeoForge's own
+ * {@code Blocks.<clinit>} transitively reaches {@code FeatureFlags.<clinit>} ->
+ * {@code FeatureFlagLoader.loadModdedFlags} -> {@code LoadingModList.get().getModFiles()}, so without
+ * this line {@code Bootstrap.bootStrap()} itself throws {@code NullPointerException} wrapped in
+ * {@code ExceptionInInitializerError} the first time <em>any</em> test in the JVM touches a block/item
+ * constant — and because a failed class {@code <clinit>} is cached by the JVM, every other test in the
+ * same worker then fails with an unrelated-looking {@code NoClassDefFoundError} for the rest of the
+ * run. Feeding {@code of(...)} five empty collections is the minimal "no mods are loaded" answer that
+ * satisfies the null check without pulling in FML's real mod-discovery machinery, which unit tests
+ * have no need of and no classpath support for.
+ *
+ * <p><b>The {@code neoforge:*} attribute post-registration, and why it has to run AFTER
+ * {@code Bootstrap.bootStrap()}, not before:</b> {@code Bootstrap.bootStrap()} eagerly builds an
+ * {@link net.minecraft.world.entity.ai.attributes.AttributeSupplier} for every living entity type via
+ * {@code DefaultAttributes.<clinit>} — including the Allay, whose {@code createAttributes()}
+ * references two attributes NeoForge itself adds via
+ * {@code net.neoforged.neoforge.common.NeoForgeMod}: {@code SWIM_SPEED} and
+ * {@code NAMETAG_DISTANCE} (found by iterating: fixing {@code swim_speed} alone still left
+ * {@code nametag_distance} throwing the identical way). Each is a {@code DeferredHolder}, which only
+ * resolves once NeoForge's own {@code DeferredRegister} has fired a real {@code RegisterEvent} during
+ * mod loading — machinery this headless unit-test JVM never runs (same root cause as the
+ * {@code LoadingModList} gap above: no FML lifecycle at all). Without a fix,
+ * {@code DefaultAttributes.<clinit>} itself throws the first time any test resolves a mob's attribute
+ * supplier, and — same JVM-wide poisoned-{@code <clinit>} trap as the {@code LoadingModList} case —
+ * every other test that ever touches a living-entity attribute fails for the rest of the run with an
+ * unrelated-looking {@code NoClassDefFoundError}. {@code CREATIVE_FLIGHT}, {@code NeoForgeMod}'s third
+ * and last custom attribute, is registered pre-emptively too even though no {@code DefaultAttributes}
+ * entry threw on it in this branch's entity roster — cheaper than a third round-trip through this same
+ * failure mode the moment a future Minecraft version's mob references it.
+ *
+ * <p>Registering <em>before</em> {@code Bootstrap.bootStrap()} does not work: touching
+ * {@code BuiltInRegistries} at all before {@code Bootstrap.bootStrap()} has set its internal
+ * "bootstrapped" flag throws {@code IllegalArgumentException: Not bootstrapped} from
+ * {@code BuiltInRegistries.<clinit>} itself (verified — this was this fix's first, failing attempt).
+ * Registering <em>after</em> a normal return from {@code Bootstrap.bootStrap()} does not work either:
+ * {@code Bootstrap.bootStrap()}'s own last step, {@code BuiltInRegistries.bootStrap()}, freezes every
+ * built-in registry, and a frozen {@link MappedRegistry} rejects new entries. So this briefly
+ * {@link MappedRegistry#unfreeze() unfreeze}s just the attribute registry immediately after
+ * {@code Bootstrap.bootStrap()} returns, registers the missing entries, and re-freezes — matching
+ * NeoForge's own real definitions (verified against {@code NeoForgeMod.java}'s source for all three)
+ * rather than replicating NeoForge's event-bus registration lifecycle, since a {@code DeferredHolder}
+ * only cares that <em>a</em> value is bound at its resource location by the time something calls
+ * {@code .value()} on it, not how it got there.
  */
 public final class McTestRegistries {
 
@@ -28,9 +84,39 @@ public final class McTestRegistries {
         if (bootstrapped) {
             return;
         }
+        if (LoadingModList.get() == null) {
+            LoadingModList.of(List.of(), List.of(), List.of(), List.of(), Map.of());
+        }
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
+        registerMissingNeoForgeAttributes();
         bootstrapped = true;
+    }
+
+    /** See the class javadoc's "neoforge:* attribute" section for why this exists and its ordering. */
+    @SuppressWarnings("unchecked")
+    private static void registerMissingNeoForgeAttributes() {
+        final MappedRegistry<Attribute> attributes = (MappedRegistry<Attribute>) BuiltInRegistries.ATTRIBUTE;
+        attributes.unfreeze();
+        try {
+            registerIfMissing("swim_speed",
+                    () -> new PercentageAttribute("neoforge.swim_speed", 1.0D, 0.0D, 1024.0D)
+                            .setSyncable(true));
+            registerIfMissing("nametag_distance",
+                    () -> new RangedAttribute("neoforge.name_tag_distance", 64.0D, 0.0D, 64.0D)
+                            .setSyncable(true).setSentiment(Attribute.Sentiment.NEUTRAL));
+            registerIfMissing("creative_flight",
+                    () -> new BooleanAttribute("neoforge.creative_flight", false).setSyncable(true));
+        } finally {
+            attributes.freeze();
+        }
+    }
+
+    private static void registerIfMissing(String path, java.util.function.Supplier<Attribute> factory) {
+        final ResourceLocation id = ResourceLocation.fromNamespaceAndPath("neoforge", path);
+        if (!BuiltInRegistries.ATTRIBUTE.containsKey(id)) {
+            Registry.register(BuiltInRegistries.ATTRIBUTE, id, factory.get());
+        }
     }
 
     /**

@@ -2,7 +2,7 @@ package com.gmail.nossr50.platform;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import net.minecraft.entity.boss.BossBar;
+import net.minecraft.world.BossEvent;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -11,8 +11,9 @@ import org.junit.jupiter.api.Test;
  * boss-bar port with real branching (Bukkit's {@code BarStyle.SEGMENTED_n} becomes vanilla
  * {@code NOTCHED_n}, {@code SOLID} becomes {@code PROGRESS}) and the fallbacks for a bad config value.
  *
- * <p>Runs under the {@code fabric-loader-junit} registry harness because touching
- * {@link BossBar.Color}/{@link BossBar.Style} loads the vanilla entity/boss classes.
+ * <p>Runs under the Minecraft/NeoForge registry harness because touching
+ * {@link BossEvent.BossBarColor}/{@link BossEvent.BossBarOverlay} loads the vanilla entity/boss
+ * classes.
  */
 class ExperienceBarWrapperTest {
 
@@ -23,32 +24,36 @@ class ExperienceBarWrapperTest {
 
     @Test
     void mapsBukkitColorNamesDirectly() {
-        assertEquals(BossBar.Color.YELLOW, ExperienceBarWrapper.mapColor("YELLOW"));
-        assertEquals(BossBar.Color.PURPLE, ExperienceBarWrapper.mapColor("PURPLE"));
-        assertEquals(BossBar.Color.GREEN, ExperienceBarWrapper.mapColor("green"), "case-insensitive");
+        assertEquals(BossEvent.BossBarColor.YELLOW, ExperienceBarWrapper.mapColor("YELLOW"));
+        assertEquals(BossEvent.BossBarColor.PURPLE, ExperienceBarWrapper.mapColor("PURPLE"));
+        assertEquals(BossEvent.BossBarColor.GREEN, ExperienceBarWrapper.mapColor("green"),
+                "case-insensitive");
     }
 
     @Test
     void unknownColorFallsBackToPink() {
-        assertEquals(BossBar.Color.PINK, ExperienceBarWrapper.mapColor("chartreuse"));
+        assertEquals(BossEvent.BossBarColor.PINK, ExperienceBarWrapper.mapColor("chartreuse"));
     }
 
     @Test
     void mapsSegmentedStylesToNotched() {
-        assertEquals(BossBar.Style.NOTCHED_6, ExperienceBarWrapper.mapStyle("SEGMENTED_6"));
-        assertEquals(BossBar.Style.NOTCHED_10, ExperienceBarWrapper.mapStyle("SEGMENTED_10"));
-        assertEquals(BossBar.Style.NOTCHED_12, ExperienceBarWrapper.mapStyle("SEGMENTED_12"));
-        assertEquals(BossBar.Style.NOTCHED_20, ExperienceBarWrapper.mapStyle("SEGMENTED_20"));
+        assertEquals(BossEvent.BossBarOverlay.NOTCHED_6, ExperienceBarWrapper.mapStyle("SEGMENTED_6"));
+        assertEquals(BossEvent.BossBarOverlay.NOTCHED_10,
+                ExperienceBarWrapper.mapStyle("SEGMENTED_10"));
+        assertEquals(BossEvent.BossBarOverlay.NOTCHED_12,
+                ExperienceBarWrapper.mapStyle("SEGMENTED_12"));
+        assertEquals(BossEvent.BossBarOverlay.NOTCHED_20,
+                ExperienceBarWrapper.mapStyle("SEGMENTED_20"));
     }
 
     @Test
     void mapsSolidToProgress() {
-        assertEquals(BossBar.Style.PROGRESS, ExperienceBarWrapper.mapStyle("SOLID"));
+        assertEquals(BossEvent.BossBarOverlay.PROGRESS, ExperienceBarWrapper.mapStyle("SOLID"));
     }
 
     @Test
     void unknownStyleFallsBackToNotched6() {
-        assertEquals(BossBar.Style.NOTCHED_6, ExperienceBarWrapper.mapStyle("zigzag"));
+        assertEquals(BossEvent.BossBarOverlay.NOTCHED_6, ExperienceBarWrapper.mapStyle("zigzag"));
     }
 
     /**
@@ -58,9 +63,9 @@ class ExperienceBarWrapperTest {
      */
     @Test
     void theEarlyGameBoostOverridesTheConfiguredBarColor() {
-        assertEquals(BossBar.Color.YELLOW, ExperienceBarWrapper.resolveColor(true, "BLUE"),
+        assertEquals(BossEvent.BossBarColor.YELLOW, ExperienceBarWrapper.resolveColor(true, "BLUE"),
                 "while boosted the bar is yellow whatever the skill's colour is set to");
-        assertEquals(BossBar.Color.BLUE, ExperienceBarWrapper.resolveColor(false, "BLUE"),
+        assertEquals(BossEvent.BossBarColor.BLUE, ExperienceBarWrapper.resolveColor(false, "BLUE"),
                 "otherwise the configured colour wins");
     }
 }
