@@ -48,17 +48,35 @@ import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.entity.projectile.ThrownTrident;
 import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 import net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * The K1/K2 damage hook: mcMMO's window into the vanilla damage pipeline. Driven by a mixin on
- * {@link LivingEntity#getDamageAfterMagicAbsorb(DamageSource, float)} (official mappings' name for
- * the Fabric original's yarn-named {@code modifyAppliedDamage}; see
- * {@code neoforge.mixin.LivingEntityDamageMixin}) rather than a NeoForge event, because mcMMO needs
- * to <em>modify</em> the applied damage (Parkour Roll reduces fall damage) and NeoForge's
- * {@link LivingIncomingDamageEvent} veto fires before mitigation, not after — it can cancel a hit
- * but cannot shrink one.
+ * The K1/K2 damage hook: mcMMO's window into the vanilla damage pipeline.
+ *
+ * <p><b>PORT correction (review round 1):</b> the main damage-modification seam
+ * ({@link #onModifyAppliedDamage}) is driven by a plain NeoForge event,
+ * {@link LivingDamageEvent.Pre}, <em>not</em> a mixin. The first pass wired it to a
+ * {@code @ModifyReturnValue} mixin on {@code LivingEntity#getDamageAfterMagicAbsorb} (the naive
+ * translation of the Fabric original's yarn-named {@code modifyAppliedDamage} seam) — bytecode
+ * review (via {@code javap -c} against the actual compiled, NeoForge-patched class) found that
+ * NeoForge discards that method's return value outright (an {@code invokevirtual} immediately
+ * followed by {@code pop} in both {@code LivingEntity#actuallyHurt} and
+ * {@code Player#actuallyHurt}), so a mixin there would compile, apply, and do nothing at
+ * runtime — see {@code neoforge.mixin.LivingEntityDamageMixin}'s class javadoc for the full
+ * bytecode evidence. NeoForge's own damage pipeline instead derives the applied damage from
+ * {@code CommonHooks.onLivingDamagePre(LivingEntity, DamageContainer)}, which posts
+ * {@link LivingDamageEvent.Pre} on {@link NeoForge#EVENT_BUS} — that event's own javadoc states
+ * it fires "after armor, and potion modifiers have already been applied to the damage value",
+ * i.e. exactly yarn {@code modifyAppliedDamage}'s position in the pipeline, and it is mutable via
+ * {@link LivingDamageEvent.Pre#setNewDamage(float)}. No mixin is needed for this seam.
+ *
+ * <p>The <em>pre-armor</em> capture (Unarmored's XP read) is still a mixin
+ * ({@code neoforge.mixin.LivingEntityDamageMixin}, {@code @Inject} on
+ * {@code getDamageAfterArmorAbsorb}'s {@code HEAD}) — unaffected by the return-value defect above,
+ * since a HEAD injector only reads arguments, never a return value — because
+ * {@code LivingDamageEvent.Pre} fires <em>after</em> armor mitigation, too late for that reading.
  *
  * <p><b>PORT (NeoForge, Phase 2 Task A):</b> this task lands the dispatcher shell plus every branch
  * that has no dependency on a not-yet-ported skill listener: Parkour's Roll/Graceful Roll/Dodge/
@@ -78,18 +96,19 @@ import org.jetbrains.annotations.NotNull;
  * below turns it away — so a Serrated Strikes AoE or a Rupture tick pays no XP, matching legacy's
  * custom-damage marker.
  *
- * <p>Some branches do <em>not</em> ride the mixin — Unarmed's <b>Arrow Deflect</b> and Taming's
- * <b>Beast Lore</b> and Environmentally Aware's FALL arm (dispatched from {@link #onAllowDamage}) —
- * because they cancel the hit outright, so they ride NeoForge's cancel-only
- * {@link LivingIncomingDamageEvent} veto — hence this class has a {@link #register()} as well as a
- * mixin entry point.
+ * <p>Some branches do <em>not</em> ride {@link LivingDamageEvent.Pre} — Unarmed's <b>Arrow
+ * Deflect</b> and Taming's <b>Beast Lore</b> and Environmentally Aware's FALL arm (dispatched from
+ * {@link #onAllowDamage}) — because they cancel the hit outright, so they ride NeoForge's
+ * cancel-only {@link LivingIncomingDamageEvent} veto instead (fired earlier, before any
+ * mitigation) — hence this class registers two separate event listeners in {@link #register()}.
  *
- * <p>And one branch needs a reading the {@code getDamageAfterMagicAbsorb} seam cannot give it at
- * all: <b>Unarmored</b>'s XP is paid on the damage as it was <em>before</em> armor mitigation (see
+ * <p>And one branch needs a reading the {@link LivingDamageEvent.Pre} seam cannot give it at all:
+ * <b>Unarmored</b>'s XP is paid on the damage as it was <em>before</em> armor mitigation (see
  * {@link #maybeAwardUnarmoredXp}), because the skill's own Iron Skin bonus is armor and would
- * otherwise throttle the XP that grants it. That value is captured a few bytecodes upstream by a
- * second injector on {@code getDamageAfterArmorAbsorb} and joined to this one through
- * {@link #recordPreArmorDamage} — so the same mixin class has two entry points into this listener.
+ * otherwise throttle the XP that grants it. That value is captured upstream by the mixin's
+ * {@code getDamageAfterArmorAbsorb} injector and joined to this class through
+ * {@link #recordPreArmorDamage} — the only piece of this listener still driven by a mixin rather
+ * than an event.
  */
 public final class EntityDamageListener {
 
@@ -97,10 +116,16 @@ public final class EntityDamageListener {
     }
 
     /**
-     * Subscribe the branches of this listener that need to <em>veto</em> a hit outright rather than
-     * reduce it — Unarmed's Arrow Deflect, Taming's Beast Lore and Environmentally Aware's FALL arm
-     * (see {@link #onAllowDamage}). Everything else here is driven by the
-     * {@code getDamageAfterMagicAbsorb} mixin, which cannot cancel.
+     * Subscribe this listener's two NeoForge event entry points (the mixin's own registration is
+     * automatic, via {@code mcmmo.mixins.json}, and needs no call here):
+     * <ul>
+     *   <li>{@link LivingIncomingDamageEvent} — the branches that need to <em>veto</em> a hit
+     *       outright rather than reduce it: Unarmed's Arrow Deflect, Taming's Beast Lore and
+     *       Environmentally Aware's FALL arm (see {@link #onAllowDamage}).</li>
+     *   <li>{@link LivingDamageEvent.Pre} — the main damage-modification seam (see
+     *       {@link #onModifyAppliedDamage}), which fires later, after armor/potion mitigation but
+     *       before health is actually reduced.</li>
+     * </ul>
      *
      * <p>{@link LivingIncomingDamageEvent} is posted on {@link NeoForge#EVENT_BUS} (the game bus —
      * confirmed via {@code CommonHooks#onEntityIncomingDamage}'s own source, which posts it there
@@ -109,9 +134,20 @@ public final class EntityDamageListener {
      * {@code LivingEntity#hurt(DamageSource, float)} "after invulnerability checks but before any
      * damage processing/mitigation": strictly before armor/magic absorption, knockback, the i-frame
      * window and the hurt sound, exactly like the Fabric original's {@code ALLOW_DAMAGE} veto.
+     *
+     * <p>{@link LivingDamageEvent.Pre} is likewise posted on {@link NeoForge#EVENT_BUS} (confirmed
+     * via {@code CommonHooks#onLivingDamagePre}'s source, which also posts directly, not via
+     * {@code IModBusEvent}), is <em>not</em> cancellable (only mutable, via
+     * {@link LivingDamageEvent.Pre#setNewDamage(float)}), and — per its own class javadoc — fires
+     * in {@code LivingEntity#actuallyHurt(DamageSource, float)} once "armor, and potion modifiers
+     * have already been applied to the damage value" and before "any changes to the entity health
+     * has been applied": exactly the seam the Fabric original's {@code modifyAppliedDamage} mixin
+     * occupied, now reached through a real event instead of a return-value mixin (see this class's
+     * own javadoc for why the mixin approach silently failed on NeoForge).
      */
     public static void register() {
         NeoForge.EVENT_BUS.addListener(EntityDamageListener::onLivingIncomingDamage);
+        NeoForge.EVENT_BUS.addListener(EntityDamageListener::onLivingDamagePre);
     }
 
     private static void onLivingIncomingDamage(LivingIncomingDamageEvent event) {
@@ -120,13 +156,18 @@ public final class EntityDamageListener {
         }
     }
 
+    private static void onLivingDamagePre(LivingDamageEvent.Pre event) {
+        event.setNewDamage(
+                onModifyAppliedDamage(event.getEntity(), event.getSource(), event.getNewDamage()));
+    }
+
     /**
      * NeoForge's cancel-only pre-mitigation veto: the dispatcher for every mcMMO damage branch that
-     * must abort a hit outright rather than merely reduce it (the {@code getDamageAfterMagicAbsorb}
-     * mixin can only reduce). Legacy expressed all of these as {@code event.setCancelled(true)}, and
-     * like Bukkit's cancel this fires before knockback, i-frames and the hurt sound — returning
-     * {@code 0} from the mixin would zero the damage but still knock back, burn the i-frame window and
-     * consume the arrow, so the veto is the faithful seam, not a workaround.
+     * must abort a hit outright rather than merely reduce it ({@link LivingDamageEvent.Pre} can only
+     * modify, not cancel). Legacy expressed all of these as {@code event.setCancelled(true)}, and
+     * like Bukkit's cancel this fires before knockback, i-frames and the hurt sound — merely zeroing
+     * the damage in the later event would still knock back, burn the i-frame window and consume the
+     * arrow, so the veto is the faithful seam, not a workaround.
      *
      * <p>Branches, in dispatch order: Unarmed's <b>Arrow Deflect</b> (a bare-handed player swats an
      * arrow; see {@link #isArrowDeflected}), the <b>bone-inspection</b> dispatcher's <b>Beast Lore</b>
@@ -298,8 +339,8 @@ public final class EntityDamageListener {
     }
 
     /**
-     * Invoked from the {@code getDamageAfterMagicAbsorb} mixin for every living-entity hit. Returns
-     * the (possibly reduced/increased) damage to apply.
+     * Invoked from the {@link #onLivingDamagePre} {@link LivingDamageEvent.Pre} handler for every
+     * living-entity hit. Returns the (possibly reduced/increased) damage to apply.
      *
      * @param entity the entity taking damage
      * @param source the damage source
@@ -345,9 +386,9 @@ public final class EntityDamageListener {
         // for why. It adds no damage, so it is not part of the running total and nothing below
         // depends on its position.
         sicPetsOnRangedHit(entity, source);
-        // Pass 2: Parkour Smash. Rides the same melee seam rather than adding a second damage mixin,
-        // but deliberately outside the weapon-classified arm above — Smash is about the *sprint*, so
-        // it applies whatever is in the player's hand, including nothing.
+        // Pass 2: Parkour Smash. Rides the same melee seam rather than adding a second event
+        // listener, but deliberately outside the weapon-classified arm above — Smash is about the
+        // *sprint*, so it applies whatever is in the player's hand, including nothing.
         result = applySprintSmash(entity, source, result);
 
         // Pass 2: Stealth Assassin. Sibling of Smash on the same seam and mutually exclusive with it
@@ -418,19 +459,21 @@ public final class EntityDamageListener {
      * <p>Both identities are held so the consumer can refuse a reading that is not demonstrably the
      * one it is looking at. Cheap insurance against the only thing that could break the join — some
      * other mod, or a future vanilla refactor, calling {@code getDamageAfterArmorAbsorb} somewhere
-     * that is not immediately followed by {@code getDamageAfterMagicAbsorb} on the same hit.
+     * that is not followed, within the same {@code actuallyHurt} frame, by a
+     * {@link LivingDamageEvent.Pre} post for the same hit.
      */
     private record PreArmorDamage(LivingEntity entity, DamageSource source, float amount) {
     }
 
     /**
-     * The most recent pre-armor reading on this thread, set by {@code LivingEntityDamageMixin} and
-     * consumed a few bytecodes later by {@link #onModifyAppliedDamage}.
+     * The most recent pre-armor reading on this thread, set by {@code LivingEntityDamageMixin}'s
+     * {@code getDamageAfterArmorAbsorb} injector and consumed a few instructions later — by the
+     * time {@link LivingDamageEvent.Pre} posts — by {@link #onModifyAppliedDamage}.
      *
      * <p>Thread-local rather than a field or a map because the whole lifetime of the value is one
-     * pair of adjacent calls inside a single {@code actuallyHurt} frame — the same
-     * {@code CombatUtils.IN_MCMMO_DAMAGE} shape this port uses everywhere it has to join two
-     * injectors.
+     * mixin-then-event pair inside a single {@code actuallyHurt} frame — the same
+     * {@code CombatUtils.IN_MCMMO_DAMAGE} shape this port uses everywhere it has to join two entry
+     * points into the same hit.
      */
     private static final ThreadLocal<PreArmorDamage> PRE_ARMOR_DAMAGE = new ThreadLocal<>();
 
@@ -710,7 +753,7 @@ public final class EntityDamageListener {
         if (mmoPlayer == null) {
             return amount;
         }
-        // TUNING (CONVERSION_TODO §F): as with the melee bonuses, getDamageAfterMagicAbsorb is
+        // TUNING (CONVERSION_TODO §F): as with the melee bonuses, LivingDamageEvent.Pre fires
         // POST-armor, so the reduction compounds with armor rather than preceding it as in legacy.
         // Legacy additionally cancelled the hit outright when the reduction took it to <= 0; a
         // returned 0 here is equivalent in effect (no health lost).
@@ -935,10 +978,10 @@ public final class EntityDamageListener {
     public static void clear() {
         LAST_DAMAGED_TICK.clear();
         // Belt-and-braces, not a fix for a known leak: the pre-armor stash is cleared on every read,
-        // so the only way one survives is a hit whose getDamageAfterArmorAbsorb ran and whose
-        // getDamageAfterMagicAbsorb did not. That would strand a single entity + damage source
-        // reference on the server thread, which in singleplayer outlives the world the player just
-        // left.
+        // so the only way one survives is a hit whose getDamageAfterArmorAbsorb mixin injector ran
+        // and whose LivingDamageEvent.Pre never posted. That would strand a single entity + damage
+        // source reference on the server thread, which in singleplayer outlives the world the
+        // player just left.
         PRE_ARMOR_DAMAGE.remove();
     }
 
