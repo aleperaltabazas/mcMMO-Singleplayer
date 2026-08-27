@@ -61,7 +61,8 @@ public final class PlayerSessionListener {
         NeoForge.EVENT_BUS.addListener(PlayerSessionListener::onQuit);
     }
 
-    private static void onJoin(PlayerEvent.PlayerLoggedInEvent event) {
+    /** Package-private for {@code PlayerSessionListenerTest}. */
+    static void onJoin(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer vanilla)) {
             return; // client-side event firing: ignore.
         }
@@ -126,7 +127,8 @@ public final class PlayerSessionListener {
      * @param event carries the new (freshly constructed) entity as {@code getEntity()} and the
      *              outgoing one as {@link PlayerEvent.Clone#getOriginal()}
      */
-    private static void onRespawn(PlayerEvent.Clone event) {
+    /** Package-private for {@code PlayerSessionListenerTest}. */
+    static void onRespawn(PlayerEvent.Clone event) {
         if (!(event.getEntity() instanceof ServerPlayer vanilla)) {
             return; // client-side event firing: ignore.
         }
@@ -143,7 +145,8 @@ public final class PlayerSessionListener {
         mmoPlayer.actualizeRespawnATS();
     }
 
-    private static void onQuit(PlayerEvent.PlayerLoggedOutEvent event) {
+    /** Package-private for {@code PlayerSessionListenerTest}. */
+    static void onQuit(PlayerEvent.PlayerLoggedOutEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer vanilla)) {
             return; // client-side event firing: ignore.
         }
