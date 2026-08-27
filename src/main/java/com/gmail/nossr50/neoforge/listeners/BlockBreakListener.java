@@ -44,16 +44,14 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import org.jetbrains.annotations.Nullable;
@@ -108,9 +106,19 @@ public final class BlockBreakListener {
     private BlockBreakListener() {
     }
 
-    /** Register the block-break hook. Called once at mod load from {@code McMMOMod}. */
+    /**
+     * Register the block-break hook. Called once at mod load from {@code McMMOMod}.
+     *
+     * <p>Registered at {@link EventPriority#LOWEST}, not the default {@code NORMAL}: NeoForge's
+     * event bus dispatches listeners in {@code HIGHEST -> LOWEST} order (confirmed against
+     * {@code net.neoforged.bus.api.EventPriority}'s declaration order, which the bus sorts by), so
+     * {@code NORMAL} runs <i>before</i> {@code LOW}/{@code LOWEST}, not after. This handler's
+     * {@code isCanceled()} check (see {@link #onBlockBreak}) only sees the effect of every other
+     * mod's cancellation if it itself runs last, which requires the lowest priority band, not the
+     * default one.
+     */
     public static void register() {
-        NeoForge.EVENT_BUS.addListener(BlockBreakListener::onBlockBreak);
+        NeoForge.EVENT_BUS.addListener(EventPriority.LOWEST, BlockBreakListener::onBlockBreak);
     }
 
     /**
@@ -383,14 +391,19 @@ public final class BlockBreakListener {
      * crop has a known replant seed → the Green Thumb roll succeeds (Green Terra bypasses it) → the
      * seed is present (main or off hand). Only then is the seed consumed and the replant scheduled.
      *
-     * <p>PORT deviations, both forced by the collapsed break-event seam (the block is already broken
-     * and its drops spawned when we run, exactly as the Fabric AFTER seam this replaces):
+     * <p>PORT deviations, both forced by the collapsed break-event seam. Unlike the Fabric AFTER
+     * seam this replaces, {@code BlockEvent.BreakEvent} fires <i>before</i> the block is removed —
+     * the block is still standing and its drops have not spawned yet when this runs — but NeoForge's
+     * {@code BreakEvent} still exposes no drop-suppression control (no {@code setDropItems}-style
+     * seam), so the immature-crop deviation below is unavoidable the same way it would be if the
+     * drops had already spawned:
      * <ul>
      *   <li><b>Immature-crop drop suppression is dropped.</b> Legacy called
-     *       {@code blockBreakEvent.setDropItems(false)} when it replanted an immature crop; the drops
-     *       are already out by the time this fires, so an immature crop keeps its (typically
-     *       one-seed) drop. Net: replanting an immature crop is one seed cheaper than legacy. The
-     *       common mature-crop path is unaffected — legacy never suppressed those drops.</li>
+     *       {@code blockBreakEvent.setDropItems(false)} when it replanted an immature crop; this
+     *       event offers no equivalent way to suppress the drop that vanilla spawns once the break
+     *       completes, so an immature crop keeps its (typically one-seed) drop. Net: replanting an
+     *       immature crop is one seed cheaper than legacy. The common mature-crop path is unaffected
+     *       — legacy never suppressed those drops.</li>
      *   <li>The {@code RecentlyReplantedCropMeta} "don't let the player instantly re-break the fresh
      *       sprout" guard is dropped (a cosmetic anti-accident polish); instead the deferred set only
      *       lands if the position is still air (see {@link #scheduleReplant}), so it never overwrites
