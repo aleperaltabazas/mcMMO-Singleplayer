@@ -13,11 +13,11 @@ import com.gmail.nossr50.datatypes.treasure.ShakeTreasure;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.PotionContentsComponent;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.potion.Potions;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.item.alchemy.Potions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -38,8 +38,8 @@ class ItemSpecBuilderTest {
         com.gmail.nossr50.util.McTestRegistries.bootstrap();
     }
 
-    private static PotionContentsComponent contentsOf(ItemStack stack) {
-        return stack.get(DataComponentTypes.POTION_CONTENTS);
+    private static PotionContents contentsOf(ItemStack stack) {
+        return stack.get(DataComponents.POTION_CONTENTS);
     }
 
     @Test
@@ -58,37 +58,37 @@ class ItemSpecBuilderTest {
 
         assertTrue(built.isPresent());
         assertSame(Items.POTION, built.get().getItem());
-        final PotionContentsComponent contents = contentsOf(built.get());
+        final PotionContents contents = contentsOf(built.get());
         assertNotNull(contents, "a potion spec must set POTION_CONTENTS");
-        assertTrue(contents.matches(Potions.POISON));
+        assertTrue(contents.is(Potions.POISON));
     }
 
     @Test
     void translatesLegacyBukkitPotionNames() {
         // The shipped config still uses the pre-1.20.5 Bukkit spellings; platform/Potions maps them.
         assertTrue(contentsOf(build("splash_potion", "INSTANT_HEAL", false, false))
-                .matches(Potions.HEALING), "INSTANT_HEAL must resolve to healing");
+                .is(Potions.HEALING), "INSTANT_HEAL must resolve to healing");
         assertTrue(contentsOf(build("splash_potion", "SPEED", false, false))
-                .matches(Potions.SWIFTNESS), "SPEED must resolve to swiftness");
+                .is(Potions.SWIFTNESS), "SPEED must resolve to swiftness");
         assertTrue(contentsOf(build("splash_potion", "FIRE_RESISTANCE", false, false))
-                .matches(Potions.FIRE_RESISTANCE));
+                .is(Potions.FIRE_RESISTANCE));
     }
 
     @Test
     void upgradedAndExtendedSelectTheVariantEntries() {
         // In modern MC these are not flags but distinct registry entries, so the flags must move the
         // lookup onto strong_/long_ ids rather than being silently dropped.
-        assertTrue(contentsOf(build("potion", "POISON", true, false)).matches(Potions.STRONG_POISON));
-        assertTrue(contentsOf(build("potion", "POISON", false, true)).matches(Potions.LONG_POISON));
+        assertTrue(contentsOf(build("potion", "POISON", true, false)).is(Potions.STRONG_POISON));
+        assertTrue(contentsOf(build("potion", "POISON", false, true)).is(Potions.LONG_POISON));
         assertTrue(contentsOf(build("potion", "INSTANT_HEAL", true, false))
-                .matches(Potions.STRONG_HEALING), "the legacy-name mapping must survive the prefix");
+                .is(Potions.STRONG_HEALING), "the legacy-name mapping must survive the prefix");
     }
 
     @Test
     void fallsBackToTheBaseWhenNoVariantExists() {
         // Healing has no long_ variant; legacy resolveVariant fell back to the base rather than
         // rejecting the treasure, so an operator asking for one gets a plain healing potion.
-        assertTrue(contentsOf(build("potion", "INSTANT_HEAL", false, true)).matches(Potions.HEALING));
+        assertTrue(contentsOf(build("potion", "INSTANT_HEAL", false, true)).is(Potions.HEALING));
     }
 
     @Test

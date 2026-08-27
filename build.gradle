@@ -49,6 +49,18 @@ sourceSets {
             include 'com/gmail/nossr50/locale/**'
         }
     }
+    // Task 8: src/test/java compiles against real Minecraft types (McTestRegistries and dozens of
+    // unit tests mock/exercise net.minecraft.* classes directly, official-mapped). The NeoForge
+    // ModDevGradle plugin wires the Minecraft/NeoForge dependency graph onto sourceSets.main's own
+    // compileClasspath, not onto a configuration testCompileClasspath extends from -- confirmed by
+    // `./gradlew dependencies --configuration testCompileClasspath` showing only JUnit/Mockito/
+    // snakeyaml, versus `--configuration compileClasspath` showing the full Minecraft/NeoForge/
+    // Netty/LWJGL graph. Without this, every net.minecraft.* import in src/test/java fails with
+    // "package ... does not exist" regardless of whether it uses yarn or official names.
+    test {
+        compileClasspath += sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.runtimeClasspath
+    }
 }
 
 neoForge {

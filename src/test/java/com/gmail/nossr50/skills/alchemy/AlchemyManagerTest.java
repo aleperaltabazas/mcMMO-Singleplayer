@@ -15,7 +15,7 @@ import com.gmail.nossr50.datatypes.experience.XPGainSource;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
 import com.gmail.nossr50.datatypes.skills.alchemy.PotionStage;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import com.gmail.nossr50.util.player.UserManager;
 import java.nio.file.Path;

@@ -12,15 +12,15 @@ import com.gmail.nossr50.config.experience.ExperienceConfig;
 import com.gmail.nossr50.datatypes.skills.alchemy.AlchemyPotion;
 import com.gmail.nossr50.datatypes.skills.alchemy.PotionSpec;
 import com.gmail.nossr50.datatypes.skills.alchemy.PotionStage;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformItem;
 import com.gmail.nossr50.util.McTestRegistries;
 import java.nio.file.Path;
 import java.util.List;
-import net.minecraft.component.type.PotionContentsComponent;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.potion.Potions;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.item.alchemy.Potions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -75,11 +75,11 @@ class PotionConfigTest {
         final List<PlatformItem> tier1 = potionConfig.getIngredients(1);
         final List<PlatformItem> tier2 = potionConfig.getIngredients(2);
         assertFalse(tier1.isEmpty(), "tier 1 ingredients load");
-        assertTrue(tier1.stream().anyMatch(s -> s.unwrap().isOf(Items.BLAZE_POWDER)),
+        assertTrue(tier1.stream().anyMatch(s -> s.unwrap().is(Items.BLAZE_POWDER)),
                 "tier 1 includes Blaze Powder");
         // Each tier includes every lower tier's ingredients, so tier 2 is strictly larger.
         assertTrue(tier2.size() > tier1.size(), "tier 2 cascades tier 1's ingredients plus its own");
-        assertTrue(tier2.stream().anyMatch(s -> s.unwrap().isOf(Items.BLAZE_POWDER)),
+        assertTrue(tier2.stream().anyMatch(s -> s.unwrap().is(Items.BLAZE_POWDER)),
                 "the cascade carries tier 1 ingredients into tier 2");
     }
 
@@ -87,7 +87,7 @@ class PotionConfigTest {
     void resolvesAWaterPotionByItemStack() {
         // A vanilla water bottle must be recognised as the config's POTION_OF_WATER.
         final PlatformItem waterBottle = new PlatformItem(
-                PotionContentsComponent.createStack(Items.POTION, Potions.WATER));
+                PotionContents.createItemStack(Items.POTION, Potions.WATER));
         final AlchemyPotion potion = potionConfig.getPotion(waterBottle);
         assertNotNull(potion, "a vanilla water bottle resolves to a config potion");
         assertEquals("POTION_OF_WATER", potion.getPotionConfigName());

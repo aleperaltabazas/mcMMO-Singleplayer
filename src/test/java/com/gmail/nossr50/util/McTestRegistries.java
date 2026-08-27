@@ -1,22 +1,22 @@
 package com.gmail.nossr50.util;
 
 import java.util.Optional;
-import net.minecraft.Bootstrap;
 import net.minecraft.SharedConstants;
-import net.minecraft.entity.EntityType;
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.item.Item;
 
 /**
  * Shared one-time Minecraft bootstrap for unit tests that touch live vanilla registries (item/block
  * id-path extraction in {@code ItemUtils}/{@code BlockUtils}, etc.). Call {@link #bootstrap()} from a
  * {@code @BeforeAll}.
  *
- * <p>Only works under the {@code fabric-loader-junit} test launcher (see {@code build.gradle}), which
- * runs tests through Knot's classloader so Minecraft's access wideners are applied — plain JUnit
- * throws an {@code IllegalAccessError} from {@code SimpleRegistry} during registration. Idempotent:
- * {@link Bootstrap#initialize()} is itself guarded, and the flag here avoids re-entry.
+ * <p>Task 8: repointed from yarn to official mappings (NeoForge's {@code net.minecraft.server.Bootstrap}
+ * /{@code net.minecraft.SharedConstants}, not Fabric Loom's yarn-mapped equivalents) as part of the
+ * fabric/-deletion test-suite fix. Idempotent: {@link Bootstrap#bootStrap()} is itself guarded, and the
+ * flag here avoids re-entry.
  */
 public final class McTestRegistries {
 
@@ -28,8 +28,8 @@ public final class McTestRegistries {
         if (bootstrapped) {
             return;
         }
-        SharedConstants.createGameVersion();
-        Bootstrap.initialize();
+        SharedConstants.tryDetectVersion();
+        Bootstrap.bootStrap();
         bootstrapped = true;
     }
 
@@ -51,8 +51,9 @@ public final class McTestRegistries {
      * became a {@code PIG}. {@code platform/Materials} guards the same way for the same reason.
      */
     public static Optional<Item> optionalVanillaItem(String path) {
-        final Identifier id = Identifier.ofVanilla(path);
-        return Registries.ITEM.containsId(id) ? Optional.of(Registries.ITEM.get(id)) : Optional.empty();
+        final ResourceLocation id = ResourceLocation.withDefaultNamespace(path);
+        return BuiltInRegistries.ITEM.containsKey(id) ? Optional.of(BuiltInRegistries.ITEM.get(id))
+                : Optional.empty();
     }
 
     /**
@@ -64,8 +65,8 @@ public final class McTestRegistries {
      * every band.
      */
     public static boolean itemRegistryIsPopulated() {
-        return Registries.ITEM.containsId(Identifier.ofVanilla("iron_sword"))
-                && Registries.ITEM.containsId(Identifier.ofVanilla("stone"));
+        return BuiltInRegistries.ITEM.containsKey(ResourceLocation.withDefaultNamespace("iron_sword"))
+                && BuiltInRegistries.ITEM.containsKey(ResourceLocation.withDefaultNamespace("stone"));
     }
 
     /**
@@ -87,9 +88,9 @@ public final class McTestRegistries {
      * every unrecognised mob id a pig in Hunter's own first cut.
      */
     public static Optional<EntityType<?>> optionalVanillaEntityType(String path) {
-        final Identifier id = Identifier.ofVanilla(path);
-        return Registries.ENTITY_TYPE.containsId(id)
-                ? Optional.of(Registries.ENTITY_TYPE.get(id))
+        final ResourceLocation id = ResourceLocation.withDefaultNamespace(path);
+        return BuiltInRegistries.ENTITY_TYPE.containsKey(id)
+                ? Optional.of(BuiltInRegistries.ENTITY_TYPE.get(id))
                 : Optional.empty();
     }
 
@@ -102,7 +103,7 @@ public final class McTestRegistries {
      * {@code cow} are chosen because they predate every version in scope by roughly a decade.
      */
     public static boolean entityTypeRegistryIsPopulated() {
-        return Registries.ENTITY_TYPE.containsId(Identifier.ofVanilla("zombie"))
-                && Registries.ENTITY_TYPE.containsId(Identifier.ofVanilla("cow"));
+        return BuiltInRegistries.ENTITY_TYPE.containsKey(ResourceLocation.withDefaultNamespace("zombie"))
+                && BuiltInRegistries.ENTITY_TYPE.containsKey(ResourceLocation.withDefaultNamespace("cow"));
     }
 }

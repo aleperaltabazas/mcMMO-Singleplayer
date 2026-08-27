@@ -17,7 +17,13 @@ import org.junit.jupiter.api.Test;
 
 /**
  * <b>The Phase 2 build guard</b> (multi-version TODO §2.3): no Minecraft or Fabric type may be named
- * outside {@code fabric/} and {@code platform/}.
+ * outside {@code neoforge/} and {@code platform/}.
+ *
+ * <p>⚠️ <b>Repointed for the NeoForge port (Task 8):</b> {@code fabric/} was this boundary's other
+ * half until Task 8 deleted it — superseded package for package by {@code neoforge/} across Tasks
+ * 3-7. The boundary segment and the file-count thresholds below were re-measured against this
+ * branch's actual (smaller, post-deletion) main source tree rather than left pointing at a package
+ * that no longer exists.
  *
  * <p>Phase 2 sealed 26 leak sites to zero. This is what keeps them at zero. Under the branch-per-band
  * strategy (ruling R-a) every file that names a Minecraft type is a file that can <em>diverge per
@@ -57,7 +63,7 @@ class PlatformBoundaryGuardTest {
     private static final Path MAIN_SOURCES = Path.of("src", "main", "java");
 
     /** The two packages allowed to name a Minecraft type. Matched on the path, not the package line. */
-    private static final List<String> BOUNDARY_SEGMENTS = List.of("/fabric/", "/platform/");
+    private static final List<String> BOUNDARY_SEGMENTS = List.of("/neoforge/", "/platform/");
 
     /** {@code import [static] net.minecraft…;} — the acceptance criterion's form. */
     private static final Pattern MC_IMPORT = Pattern.compile(
@@ -150,12 +156,16 @@ class PlatformBoundaryGuardTest {
         // If the working directory ever moves, the walk finds nothing and every assertion above
         // passes for the wrong reason. Pin that it saw a real tree.
         final List<Path> all = sources(p -> true);
-        assertTrue(all.size() > 250,
+        // Re-measured post-Task 8 (fabric/ deletion): 228 files today, down from the Phase 2-era
+        // count this threshold originally pinned. The floor is set below the current count with
+        // headroom, not at it, so this stays a "the walk found a real tree" check rather than a
+        // brittle exact-count assertion.
+        assertTrue(all.size() > 200,
                 () -> "expected the whole main source tree; walked only " + all.size() + " files");
 
         final long boundary = all.size() - nonBoundarySources().size();
-        assertTrue(boundary > 50,
-                () -> "expected fabric/ + platform/ to hold the Minecraft-typed code; found only "
+        assertTrue(boundary > 30,
+                () -> "expected neoforge/ + platform/ to hold the Minecraft-typed code; found only "
                         + boundary + " files there");
         assertTrue(nonBoundarySources().size() > 100,
                 "expected a substantial Minecraft-free tree outside the boundary");
@@ -163,12 +173,13 @@ class PlatformBoundaryGuardTest {
 
     @Test
     void theBoundaryItselfStillNamesMinecraft() {
-        // The converse of the property: if fabric/ + platform/ stopped containing Minecraft imports,
-        // the detector is broken (or the sources are not where we think), not the mod Minecraft-free.
+        // The converse of the property: if neoforge/ + platform/ stopped containing Minecraft
+        // imports, the detector is broken (or the sources are not where we think), not the mod
+        // Minecraft-free.
         final long withMcImports = sources(PlatformBoundaryGuardTest::isBoundary).stream()
                 .filter(file -> MC_IMPORT.matcher(strip(read(file))).find())
                 .count();
-        assertTrue(withMcImports > 50,
+        assertTrue(withMcImports > 20,
                 () -> "only " + withMcImports + " boundary files import Minecraft — the detector is "
                         + "not seeing imports it should");
     }

@@ -24,7 +24,7 @@ import com.gmail.nossr50.datatypes.treasure.EnchantmentTreasure;
 import com.gmail.nossr50.datatypes.treasure.FishingTreasure;
 import com.gmail.nossr50.datatypes.treasure.ItemSpec;
 import com.gmail.nossr50.datatypes.treasure.Rarity;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import com.gmail.nossr50.util.player.UserManager;
 import java.nio.file.Path;

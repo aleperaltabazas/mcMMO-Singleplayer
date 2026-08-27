@@ -21,7 +21,7 @@ import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.player.PlayerProfile;
 import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
 import com.gmail.nossr50.datatypes.skills.SubSkillType;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;

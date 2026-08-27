@@ -3,7 +3,7 @@ package com.gmail.nossr50.skills;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.gmail.nossr50.config.experience.ExperienceConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.skills.CombatXp.MobCategory;
 import java.nio.file.Path;
 import org.junit.jupiter.api.AfterEach;

@@ -21,7 +21,7 @@ import com.gmail.nossr50.datatypes.experience.XPGainSource;
 import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
 import com.gmail.nossr50.datatypes.skills.SuperAbilityType;
 import com.gmail.nossr50.datatypes.skills.ToolType;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import com.gmail.nossr50.util.Misc;
 import com.gmail.nossr50.util.player.PlayerLevelUtils;

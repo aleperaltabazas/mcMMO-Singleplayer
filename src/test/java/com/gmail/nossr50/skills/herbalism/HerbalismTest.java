@@ -8,9 +8,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Proves the MC-free Green Terra / Shroom Thumb block-conversion lookup tables, which drive the
- * Green Terra super-ability effect wired in
- * {@link com.gmail.nossr50.fabric.listeners.SuperAbilityListener}. Pure lookups — no registry, no
- * config, no player.
+ * Green Terra super-ability effect wired in {@code SuperAbilityListener} (the Fabric listener this
+ * table backed was deleted in Task 8; its NeoForge successor has not been ported yet). Pure
+ * lookups — no registry, no config, no player.
  */
 class HerbalismTest {
 

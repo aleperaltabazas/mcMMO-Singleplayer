@@ -6,7 +6,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.gmail.nossr50.config.SoundConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import com.gmail.nossr50.platform.PlatformSoundCategory;
 import java.nio.file.Path;

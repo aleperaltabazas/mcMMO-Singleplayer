@@ -5,9 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.gmail.nossr50.config.GeneralConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
-import com.gmail.nossr50.fabric.client.modmenu.ConfigSetting;
-import com.gmail.nossr50.fabric.client.modmenu.McMMOSettings;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -72,28 +70,15 @@ class PlaceholderSuperAbilityTest {
                         + "Adding a new placeholder? It must reach no surface — see the tests below.");
     }
 
-    /**
-     * ⚠️ The Tier-1 half. A cooldown slider over an ability that can never activate is a settings
-     * screen telling the player a lie, which #9 established is worse than an absent feature.
-     */
-    @Test
-    void noPlaceholderIsOfferedACooldownSlider() {
-        final List<String> offenders = new ArrayList<>();
-        for (SuperAbilityType ability : placeholders()) {
-            // toString() ("Super_Shotgun"), not name() ("SUPER_SHOTGUN"): that is the spelling
-            // getCooldown()/getMaxLength() concatenate, so it is the only spelling that could be read.
-            final String key = ability.toString();
-            for (ConfigSetting setting : McMMOSettings.all()) {
-                if (setting.path().equals("Abilities.Cooldowns." + key)
-                        || setting.path().equals("Abilities.Max_Seconds." + key)) {
-                    offenders.add(ability + " → " + setting.path());
-                }
-            }
-        }
-        assertTrue(offenders.isEmpty(),
-                "ModMenu offers a timing slider for a super ability that has no activation code, "
-                        + "no effect body and no cooldown handling: " + offenders);
-    }
+    // ⚠️ Task 8 note: this file originally carried a Tier-1 test here, `
+    // noPlaceholderIsOfferedACooldownSlider`, asserting no placeholder super ability is offered a
+    // cooldown slider by walking `fabric.client.modmenu.McMMOSettings`/`ConfigSetting`. The ModMenu
+    // client integration is Phase 2+ work per this port's design spec (deferred back to
+    // mc/1.21.1, not carried as dead code here) and was deleted with the rest of `fabric/` in this
+    // task, so that surface does not exist to police on this branch. Removed rather than
+    // translated — there is no NeoForge settings-screen equivalent yet to check against, and
+    // faking one would test nothing real. Re-add the equivalent check once a NeoForge config
+    // screen exists and offers per-ability cooldown sliders.
 
     /**
      * The converse, and the direction a one-sided guard misses: the shipped {@code config.yml} must

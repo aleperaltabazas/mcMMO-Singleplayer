@@ -9,8 +9,9 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Proves the MC-free Block Cracker conversion lookup table, which drives the Berserk block-cracking
- * effect wired in {@link com.gmail.nossr50.fabric.listeners.SuperAbilityListener}. Pure lookups —
- * no registry, no config, no player.
+ * effect wired in {@code SuperAbilityListener} (the Fabric listener this table backed was deleted
+ * in Task 8; its NeoForge successor has not been ported yet). Pure lookups — no registry, no
+ * config, no player.
  */
 class UnarmedTest {
 

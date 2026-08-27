@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.gmail.nossr50.config.AdvancedConfig;
 import com.gmail.nossr50.config.experience.ExperienceConfig;
-import com.gmail.nossr50.fabric.McMMOMod;
+import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.skills.archery.Archery.FiredFrom;
 import java.nio.file.Path;
