@@ -97,7 +97,9 @@ public final class PlatformPlayer {
      * {@code AbilityDisableTask} capture this object directly, and they must keep working across a
      * death that happens mid-ability.
      *
-     * <p>Driven by {@code PlayerSessionListener} on Fabric's {@code ServerPlayerEvents.AFTER_RESPAWN}.
+     * <p>Driven by {@code PlayerSessionListener} — on Fabric's
+     * {@code ServerPlayerEvents.AFTER_RESPAWN}, and on NeoForge's {@code PlayerEvent.Clone}, the two
+     * platforms' equivalents of "the entity replacing this one after a death or End exit".
      *
      * @param replacement the freshly constructed entity for the same player
      */

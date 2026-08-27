@@ -16,6 +16,7 @@ import com.gmail.nossr50.event.EventBus;
 import com.gmail.nossr50.event.SimpleEventBus;
 import com.gmail.nossr50.neoforge.commands.McMMOCommands;
 import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
+import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.scheduler.TickScheduler;
@@ -174,6 +175,10 @@ public final class McMMOMod {
     private static volatile SalvageableManager salvageableManager;
     private static volatile CallOfTheWild callOfTheWild;
 
+    // Both constructor-injected parameters below are currently unused: nothing in this mod has
+    // needed to register on the mod bus (modEventBus) or read mod metadata (modContainer) yet.
+    // Kept as parameters because NeoForge's @Mod constructor-injection requires this signature
+    // shape to be satisfied to receive either one, should a later task need them.
     public McMMOMod(IEventBus modEventBus, ModContainer modContainer) {
         LOGGER.info("mcMMO (NeoForge) initializing.");
 
@@ -193,6 +198,11 @@ public final class McMMOMod {
         // fabric.McMMOMod#onInitialize for the full list this entry point will grow to match.
         BlockBreakListener.register();
         SuperAbilityListener.register();
+
+        // Whole-branch review fix: the join/respawn/quit lifecycle. This is what actually calls
+        // UserManager.track(...); without it no player ever has tracked mcMMO data and every
+        // gameplay listener above resolves UserManager.getPlayer(uuid) to null.
+        PlayerSessionListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
@@ -227,8 +237,8 @@ public final class McMMOMod {
             // something this version does not have is normal -- dropping it SILENTLY is not.
             pruneConfigEntriesUnavailableOnThisVersion();
             // Phase 5: bind the per-world profile store under <worldRoot>/mcmmo/players/. Player
-            // profiles load lazily on join (a later task's PlayerSessionListener), not eagerly
-            // here.
+            // profiles load lazily on join, via neoforge.listeners.PlayerSessionListener, not
+            // eagerly here.
             final Path modDataDir = startingServer.getWorldPath(LevelResource.ROOT).resolve(MOD_ID);
             McMMOMod.setProfileStore(new FlatFileProfileStore(modDataDir.resolve("players")));
             // §A/K9: load this world's hand-placed-block flags before any block can be broken, so
@@ -295,6 +305,9 @@ public final class McMMOMod {
             // owned it. The tasks those markers point at were just killed by cancelAll() above,
             // and a leaked rupture marker would make its target permanently immune to Rupture.
             MetadataStore.clearAll();
+            // Same argument, same table shape: MOB_ORIGIN persists entity UUIDs to disk too, so it
+            // must not outlive the session that owned it either.
+            McMMOAttachments.clearAll();
             // §A/K9: write this world's hand-placed-block flags back to its save, THEN drop them —
             // the order matters, since clearing first would persist an empty set and hand the
             // place -> mine -> repeat farm back to the player on the next load. The store
@@ -555,10 +568,16 @@ public final class McMMOMod {
 
     /**
      * The Call-of-the-Wild lookup tables (item -> summon), built from {@link GeneralConfig} at
-     * server start. Never {@code null} on an in-game code path (a summon can only be attempted
-     * inside a world session, after {@link ConfigBootstrap#loadAll} has wired it).
+     * server start, or {@code null} outside a world session (before {@link ConfigBootstrap#loadAll}
+     * has wired it, or after {@link #onServerStopping} clears the session's configs) — the same
+     * lifecycle as every other session-bound config getter in this file. Not actually reachable as
+     * {@code null} on an in-game code path (a summon can only be attempted inside a world session),
+     * but annotated {@code @Nullable} rather than {@code @NotNull} to match that lifecycle and this
+     * file's convention for it, matching e.g. {@link #getGeneralConfig()}/{@link
+     * #getPotionConfig()}: whole-branch review previously found this getter mismatched
+     * ({@code @NotNull} on a field that is genuinely {@code null} before load / after unload).
      */
-    public static @NotNull CallOfTheWild getCallOfTheWild() {
+    public static @Nullable CallOfTheWild getCallOfTheWild() {
         return callOfTheWild;
     }
 
