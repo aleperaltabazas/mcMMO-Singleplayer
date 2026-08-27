@@ -16,6 +16,7 @@ import com.gmail.nossr50.event.EventBus;
 import com.gmail.nossr50.event.SimpleEventBus;
 import com.gmail.nossr50.neoforge.commands.McMMOCommands;
 import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
+import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
 import com.gmail.nossr50.platform.MetadataStore;
@@ -204,6 +205,14 @@ public final class McMMOMod {
         // gameplay listener above resolves UserManager.getPlayer(uuid) to null.
         PlayerSessionListener.register();
 
+        // Phase 2 Task 1: the per-tick per-player movement sweep behind Agility's Land/Water/Air
+        // domains, Stealth's sneak-travel XP, Unarmored's Iron Skin re-derivation and the
+        // movement-related buffs (Fleet Footed, Lead Lungs, Solar Wings, Snow Walker state).
+        // Registered as its own independent listener pair (ServerTickEvent.Post +
+        // PlayerLoggedOutEvent), mirroring the Fabric original's decoupled registration rather than
+        // folding its disconnect cleanup into PlayerSessionListener#onQuit.
+        PlayerMovementTracker.register();
+
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
         // Commands construction (see RegisterCommandsEvent's javadoc), so it is registered on
@@ -308,6 +317,10 @@ public final class McMMOMod {
             // Same argument, same table shape: MOB_ORIGIN persists entity UUIDs to disk too, so it
             // must not outlive the session that owned it either.
             McMMOAttachments.clearAll();
+            // Phase 2 Task 1: drop the movement sweep's per-player state (positions, Solar Wings
+            // rate-limit counters, published Snow Walker flags) for the same reason — none of it is
+            // persisted, and it must not outlive the session whose players it described.
+            PlayerMovementTracker.clear();
             // §A/K9: write this world's hand-placed-block flags back to its save, THEN drop them —
             // the order matters, since clearing first would persist an empty set and hand the
             // place -> mine -> repeat farm back to the player on the next load. The store
