@@ -209,10 +209,10 @@ public final class PlayerMovementTracker {
         LAST_POSITIONS.remove(player.getUUID());
         SOLAR_WINGS_TICKS.remove(player.getUUID());
         SNOW_WALKERS.remove(player.getUUID());
-        // OMISSION: the Fabric original also called EntityDamageListener.forgetPlayer(uuid) here,
-        // cleaning up Stealth's Assassin combat side-table from the mod's one per-player disconnect
-        // hook. EntityDamageListener is not ported on this branch, so there is no side table to
-        // clean up.
+        // Phase 2 Task A: EntityDamageListener is now ported on this branch, so clean up its
+        // per-player Assassin combat recency side-table from the mod's one per-player disconnect
+        // hook, exactly as the Fabric original did.
+        EntityDamageListener.forgetPlayer(player.getUUID());
         // Belt-and-braces: the modifiers are temporary and never persisted, but leaving nothing
         // behind on a player who is no longer online makes the invariant trivially checkable.
         SkillAttributeService.clearAll(player);

@@ -16,6 +16,7 @@ import com.gmail.nossr50.event.EventBus;
 import com.gmail.nossr50.event.SimpleEventBus;
 import com.gmail.nossr50.neoforge.commands.McMMOCommands;
 import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
+import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
@@ -213,6 +214,11 @@ public final class McMMOMod {
         // folding its disconnect cleanup into PlayerSessionListener#onQuit.
         PlayerMovementTracker.register();
 
+        // Phase 2 Task A: the K1/K2 damage hook (Parkour's combat half, Unarmored, Mining's
+        // Demolitions Expertise, and Taming/Unarmed's cancel-only veto branches). Mixin-driven
+        // (LivingEntityDamageMixin) plus its own ALLOW_DAMAGE-equivalent event registration.
+        EntityDamageListener.register();
+
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
         // Commands construction (see RegisterCommandsEvent's javadoc), so it is registered on
@@ -321,6 +327,9 @@ public final class McMMOMod {
             // rate-limit counters, published Snow Walker flags) for the same reason — none of it is
             // persisted, and it must not outlive the session whose players it described.
             PlayerMovementTracker.clear();
+            // Phase 2 Task A: drop the damage hook's per-player Assassin recency window and the
+            // pre-armor ThreadLocal stash, for the same reason.
+            EntityDamageListener.clear();
             // §A/K9: write this world's hand-placed-block flags back to its save, THEN drop them —
             // the order matters, since clearing first would persist an empty set and hand the
             // place -> mine -> repeat farm back to the player on the next load. The store
