@@ -8,6 +8,7 @@
     "ExplosionDropsMixin",
     "HoeTillingActionsAccessor",
     "LivingEntityDamageMixin",
+    "LivingEntityDropFromLootTableAccessor",
     "TntExplodeMixin"
   ],
   "injectors": {
