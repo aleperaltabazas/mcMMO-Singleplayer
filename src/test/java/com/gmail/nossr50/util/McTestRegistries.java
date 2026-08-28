@@ -9,19 +9,13 @@ import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.Bootstrap;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.MobSpawnType;
 import net.minecraft.world.entity.ai.attributes.Attribute;
 import net.minecraft.world.entity.ai.attributes.RangedAttribute;
-import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.level.Level;
 import net.neoforged.fml.loading.LoadingModList;
 import net.neoforged.neoforge.common.BooleanAttribute;
 import net.neoforged.neoforge.common.PercentageAttribute;
-import org.mockito.Mockito;
 
 /**
  * Shared one-time Minecraft bootstrap for unit tests that touch live vanilla registries (item/block
@@ -199,51 +193,4 @@ public final class McTestRegistries {
                 && BuiltInRegistries.ENTITY_TYPE.containsKey(ResourceLocation.withDefaultNamespace("cow"));
     }
 
-    /**
-     * A real (non-mocked) {@link LivingEntity} of the given type, for bytecode-level testing
-     * (mixins, etc.) that mocks cannot reach.
-     *
-     * <p>Creates entities via direct constructor invocation with a comprehensively-mocked Level.
-     * The entity is real and bytecode-woven by Mixin; only the Level is stubbed.
-     *
-     * @param type the entity type to create
-     * @return a real bytecode-woven entity instance
-     * @throws RuntimeException if the type cannot be instantiated
-     */
-    public static LivingEntity newHeadlessEntity(EntityType<?> type) {
-        // Create a level mock. Zombie's constructor may call level.registryAccess(),
-        // level.getMinecraftServer(), level.getGameRules(), etc. Use RETURNS_DEEP_STUBS
-        // so that chained calls (e.g. level.registryAccess().lookupOrThrow(...)) don't fail.
-        final Level level = Mockito.mock(Level.class,
-                Mockito.withSettings().defaultAnswer(Mockito.RETURNS_DEEP_STUBS));
-        Mockito.when(level.isClientSide()).thenReturn(false);
-
-        // Map entity types to their concrete classes
-        Class<?> entityClass = null;
-        if (type == EntityType.ZOMBIE) {
-            entityClass = Zombie.class;
-        } else {
-            throw new RuntimeException("Entity type " + type + " is not supported by newHeadlessEntity");
-        }
-
-        // Try to instantiate via the (Level) constructor.
-        try {
-            final var constructor = entityClass.getDeclaredConstructor(Level.class);
-            constructor.setAccessible(true);
-            final LivingEntity entity = (LivingEntity) constructor.newInstance(level);
-            if (entity != null) {
-                return entity;
-            }
-            throw new RuntimeException("EntityType constructor returned null");
-        } catch (java.lang.reflect.InvocationTargetException ex) {
-            final Throwable cause = ex.getCause();
-            throw new RuntimeException("Cannot create real " + entityClass.getSimpleName()
-                    + " in a test environment with only a mocked Level. The entity constructor "
-                    + "requires real vanilla infrastructure (registries, server, etc.). "
-                    + "Error: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(), cause);
-        } catch (Exception ex) {
-            throw new RuntimeException("Failed to instantiate " + entityClass.getSimpleName()
-                    + ": " + ex.getClass().getSimpleName() + ": " + ex.getMessage(), ex);
-        }
-    }
 }
