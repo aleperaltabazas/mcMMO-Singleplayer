@@ -1,12 +1,16 @@
 package com.gmail.nossr50.neoforge.mixin;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.spongepowered.asm.mixin.gen.Invoker;
 import com.gmail.nossr50.util.McTestRegistries;
 
 /**
@@ -39,7 +43,7 @@ class LivingEntityDropFromLootTableAccessorTest {
     }
 
     @Test
-    void theInvokerMethodIsDeclaradWithCorrectSignature() throws NoSuchMethodException {
+    void theInvokerMethodIsDeclaredWithCorrectSignature() throws NoSuchMethodException {
         // Verify that the @Invoker abstract method was declared with the correct signature.
         // The @Invoker annotation creates an abstract method with the same signature as the
         // target method. Here we verify the interface declares the invoker method that will
@@ -48,5 +52,42 @@ class LivingEntityDropFromLootTableAccessorTest {
                 "mcmmo$invokeDropFromLootTable",
                 DamageSource.class, boolean.class);
         assertNotNull(invokerMethod, "Invoker method must exist with correct signature (source, causedByPlayer)");
+
+        // Verify the @Invoker annotation actually targets "dropFromLootTable" -- a typo here (e.g.
+        // "dropFromLootTables") would still leave the invoker method itself present and correctly
+        // shaped, so the assertion above alone cannot catch it; only reading the annotation's own
+        // value can.
+        final Invoker invoker = invokerMethod.getAnnotation(Invoker.class);
+        assertNotNull(invoker, "mcmmo$invokeDropFromLootTable must be annotated with @Invoker");
+        assertEquals("dropFromLootTable", invoker.value());
+
+        // Verify LivingEntity actually declares the exact target method this invoker expects --
+        // otherwise a mismatch here is only caught at real game launch, as an InjectionError.
+        final Method target = LivingEntity.class.getDeclaredMethod(
+                "dropFromLootTable", DamageSource.class, boolean.class);
+        assertTrue(Modifier.isProtected(target.getModifiers()),
+                "LivingEntity#dropFromLootTable(DamageSource, boolean) must be protected");
+    }
+
+    @Test
+    void theShouldDropLootAccessorStaticMethodExists() throws NoSuchMethodException {
+        final Method method = LivingEntityDropFromLootTableAccessor.class.getDeclaredMethod(
+                "shouldDropLoot", LivingEntity.class);
+        assertNotNull(method, "Static shouldDropLoot method must exist with exact signature");
+    }
+
+    @Test
+    void theShouldDropLootInvokerMethodIsDeclaredWithCorrectSignature() throws NoSuchMethodException {
+        final Method invokerMethod = LivingEntityDropFromLootTableAccessor.class.getDeclaredMethod(
+                "mcmmo$invokeShouldDropLoot");
+        assertNotNull(invokerMethod, "Invoker method must exist with correct signature (no args)");
+
+        final Invoker invoker = invokerMethod.getAnnotation(Invoker.class);
+        assertNotNull(invoker, "mcmmo$invokeShouldDropLoot must be annotated with @Invoker");
+        assertEquals("shouldDropLoot", invoker.value());
+
+        final Method target = LivingEntity.class.getDeclaredMethod("shouldDropLoot");
+        assertTrue(Modifier.isProtected(target.getModifiers()),
+                "LivingEntity#shouldDropLoot() must be protected");
     }
 }

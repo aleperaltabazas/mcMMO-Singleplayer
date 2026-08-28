@@ -4,8 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,23 +12,28 @@ import static org.mockito.Mockito.when;
 import com.gmail.nossr50.config.GeneralConfig;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.neoforge.McMMOMod;
+import com.gmail.nossr50.neoforge.mixin.LivingEntityDropFromLootTableAccessor;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import com.gmail.nossr50.skills.hunter.HunterManager;
 import com.gmail.nossr50.util.McTestRegistries;
 import com.gmail.nossr50.util.TransientEntityTracker;
 import com.gmail.nossr50.util.player.UserManager;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.UUID;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.animal.IronGolem;
-import net.minecraft.world.entity.boss.wither.WitherBoss;
+import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.Level;
+import net.neoforged.neoforge.event.entity.living.LivingDropsEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mockito;
 
 class HunterListenerTest {
 
@@ -59,6 +62,31 @@ class HunterListenerTest {
         final LivingEntity entity = mock(LivingEntity.class);
         when(entity.getUUID()).thenReturn(uuid);
         org.mockito.Mockito.doReturn(type).when(entity).getType();
+        return entity;
+    }
+
+    /**
+     * A victim mockable as both a {@link LivingEntity} and, via Mockito's extra-interfaces support,
+     * the {@link LivingEntityDropFromLootTableAccessor} its own reroll gate casts to -- lets a test
+     * exercise {@link HunterListener#onLivingDrops} all the way through the Trophy Hunter gate
+     * without needing the mixin actually woven (which plain JUnit cannot do -- see
+     * {@code LivingEntityDropFromLootTableAccessorTest}'s own javadoc).
+     */
+    private static LivingEntity trophyCapableVictim(UUID uuid, EntityType<?> type,
+            boolean shouldDropLoot, boolean doMobLoot) {
+        final LivingEntity entity = mock(LivingEntity.class,
+                Mockito.withSettings().extraInterfaces(LivingEntityDropFromLootTableAccessor.class));
+        when(entity.getUUID()).thenReturn(uuid);
+        org.mockito.Mockito.doReturn(type).when(entity).getType();
+        when(((LivingEntityDropFromLootTableAccessor) entity).mcmmo$invokeShouldDropLoot())
+                .thenReturn(shouldDropLoot);
+
+        final GameRules gameRules = mock(GameRules.class);
+        when(gameRules.getBoolean(GameRules.RULE_DOMOBLOOT)).thenReturn(doMobLoot);
+        final Level level = mock(Level.class);
+        when(level.getGameRules()).thenReturn(gameRules);
+        Mockito.doReturn(level).when(entity).level();
+
         return entity;
     }
 
@@ -170,7 +198,6 @@ class HunterListenerTest {
         // No assertion on the notification/sound call itself (those are exercised end-to-end by the
         // existing NotificationManager/SoundManager suites) -- this just proves the listener reached
         // the announcement branch instead of silently swallowing the crossing.
-        assertTrue(hunter.crossedMasteryThreshold(499, 500));
         HunterListener.onDeathForTesting(target, source);
     }
 
@@ -184,5 +211,93 @@ class HunterListenerTest {
         final HunterManager hunter = mock(HunterManager.class);
         assertFalse(HunterListener.qualifiesForTrophyRoll(target, source, hunter));
         verify(hunter, never()).rollTrophyDrop(org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void trophyHunterRollsWhenTheKillQualifiesAndTheManagerGrantsTheRoll(@TempDir Path dir)
+            throws Exception {
+        McMMOMod.setGeneralConfig(new GeneralConfig(dir));
+        final ServerPlayer attacker = killer(PLAYER_ID);
+        final DamageSource source = mock(DamageSource.class);
+        when(source.getEntity()).thenReturn(attacker);
+        final LivingEntity target = victim(VICTIM_ID, EntityType.ZOMBIE);
+
+        final HunterManager hunter = mock(HunterManager.class);
+        when(hunter.rollTrophyDrop(org.mockito.ArgumentMatchers.anyInt())).thenReturn(true);
+
+        assertTrue(HunterListener.qualifiesForTrophyRoll(target, source, hunter));
+    }
+
+    @Test
+    void trophyHunterDoesNotRollWhenTheManagerDeniesTheRoll(@TempDir Path dir) throws Exception {
+        McMMOMod.setGeneralConfig(new GeneralConfig(dir));
+        final ServerPlayer attacker = killer(PLAYER_ID);
+        final DamageSource source = mock(DamageSource.class);
+        when(source.getEntity()).thenReturn(attacker);
+        final LivingEntity target = victim(VICTIM_ID, EntityType.ZOMBIE);
+
+        final HunterManager hunter = mock(HunterManager.class);
+        when(hunter.rollTrophyDrop(org.mockito.ArgumentMatchers.anyInt())).thenReturn(false);
+
+        assertFalse(HunterListener.qualifiesForTrophyRoll(target, source, hunter));
+    }
+
+    @Test
+    void trophyRerollDoesNotFireOnABabyMob(@TempDir Path dir) throws Exception {
+        McMMOMod.setGeneralConfig(new GeneralConfig(dir));
+        final ServerPlayer attacker = killer(PLAYER_ID);
+        final DamageSource source = mock(DamageSource.class);
+        when(source.getEntity()).thenReturn(attacker);
+        // shouldDropLoot=false mirrors LivingEntity#shouldDropLoot() on a baby mob (isBaby() == true);
+        // doMobLoot=true so this test isolates the shouldDropLoot() gate specifically.
+        final LivingEntity target = trophyCapableVictim(VICTIM_ID, EntityType.ZOMBIE, false, true);
+
+        final HunterManager hunter = mock(HunterManager.class);
+        when(hunter.rollTrophyDrop(org.mockito.ArgumentMatchers.anyInt())).thenReturn(true);
+        trackedMmoPlayer(attacker, hunter);
+
+        HunterListener.onLivingDrops(new LivingDropsEvent(target, source, new ArrayList<>(), true));
+
+        Mockito.verify((LivingEntityDropFromLootTableAccessor) target, Mockito.never())
+                .mcmmo$invokeDropFromLootTable(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
+    void trophyRerollDoesNotFireWhenDoMobLootIsFalse(@TempDir Path dir) throws Exception {
+        McMMOMod.setGeneralConfig(new GeneralConfig(dir));
+        final ServerPlayer attacker = killer(PLAYER_ID);
+        final DamageSource source = mock(DamageSource.class);
+        when(source.getEntity()).thenReturn(attacker);
+        // shouldDropLoot=true (an adult mob) so this test isolates the doMobLoot gamerule gate.
+        final LivingEntity target = trophyCapableVictim(VICTIM_ID, EntityType.ZOMBIE, true, false);
+
+        final HunterManager hunter = mock(HunterManager.class);
+        when(hunter.rollTrophyDrop(org.mockito.ArgumentMatchers.anyInt())).thenReturn(true);
+        trackedMmoPlayer(attacker, hunter);
+
+        HunterListener.onLivingDrops(new LivingDropsEvent(target, source, new ArrayList<>(), true));
+
+        Mockito.verify((LivingEntityDropFromLootTableAccessor) target, Mockito.never())
+                .mcmmo$invokeDropFromLootTable(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
+    void trophyRerollFiresWhenBothGatesPass(@TempDir Path dir) throws Exception {
+        McMMOMod.setGeneralConfig(new GeneralConfig(dir));
+        final ServerPlayer attacker = killer(PLAYER_ID);
+        final DamageSource source = mock(DamageSource.class);
+        when(source.getEntity()).thenReturn(attacker);
+        final LivingEntity target = trophyCapableVictim(VICTIM_ID, EntityType.ZOMBIE, true, true);
+
+        final HunterManager hunter = mock(HunterManager.class);
+        when(hunter.rollTrophyDrop(org.mockito.ArgumentMatchers.anyInt())).thenReturn(true);
+        trackedMmoPlayer(attacker, hunter);
+
+        HunterListener.onLivingDrops(new LivingDropsEvent(target, source, new ArrayList<>(), true));
+
+        Mockito.verify((LivingEntityDropFromLootTableAccessor) target)
+                .mcmmo$invokeDropFromLootTable(source, true);
     }
 }

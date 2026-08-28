@@ -21,6 +21,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.animal.IronGolem;
+import net.minecraft.world.level.GameRules;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.living.LivingDropsEvent;
 import org.jetbrains.annotations.NotNull;
@@ -76,6 +77,15 @@ public final class HunterListener {
      * A living entity's loot has just dropped: if a player killed it and the kill qualifies, count
      * it, award XP, and offer Trophy Hunter its reroll.
      *
+     * <p><b>Trophy drops bypass {@code event.getDrops()}:</b> the reroll below goes straight to
+     * {@code level().addFreshEntity} via {@code dropFromLootTable}, not through this event's own drop
+     * list — loot capture is already off by the time this listener runs, so a later
+     * {@link LivingDropsEvent} listener (there is only one today) can neither see nor suppress the
+     * bonus items. Relatedly: {@link LivingDropsEvent} is cancellable and this listener is not
+     * registered at {@code HIGHEST} priority, so a higher-priority listener that cancels the event
+     * silently stops kill-counting and XP too, not just loot — a coupling the Fabric original did not
+     * have, since its kill counter ran off a separate, uncancellable death event.
+     *
      * @param event NeoForge's post-loot-drop event, carrying the victim, the damage source, and the
      *              "recently hit by a player" flag vanilla itself used to gate the first loot roll
      */
@@ -83,11 +93,7 @@ public final class HunterListener {
         final LivingEntity victim = event.getEntity();
         final DamageSource source = event.getSource();
 
-        final ServerPlayer killer = qualifyingKiller(victim, source);
-        if (killer == null) {
-            return;
-        }
-        final McMMOPlayer mmoPlayer = hunterPlayer(killer);
+        final McMMOPlayer mmoPlayer = qualifyingHunterPlayer(victim, source);
         if (mmoPlayer == null) {
             return;
         }
@@ -95,11 +101,18 @@ public final class HunterListener {
 
         recordKillAndAwardXp(mmoPlayer, victim, hunter);
 
-        if (hunter.rollTrophyDrop(MobTiers.tierOf(victim))) {
+        if (hunter.rollTrophyDrop(MobTiers.tierOf(victim))
+                && LivingEntityDropFromLootTableAccessor.shouldDropLoot(victim)
+                && victim.level().getGameRules().getBoolean(GameRules.RULE_DOMOBLOOT)) {
             // event.isRecentlyHit() is exactly the boolean vanilla's own dropAllDeathLoot passed to
             // the FIRST dropFromLootTable call (both are literally `lastHurtByPlayerTime > 0` --
             // verified against the patched source) -- passing it through here reproduces the first
             // roll's loot conditions exactly, matching the Fabric original's causedByPlayer passthrough.
+            //
+            // The shouldDropLoot()/RULE_DOMOBLOOT gates above mirror the same two conditions vanilla's
+            // dropAllDeathLoot wraps its own dropFromLootTable call in -- without them, the reroll would
+            // still drop a full roll on a baby mob, or with /gamerule doMobLoot false set, even though
+            // the FIRST roll correctly dropped nothing in either case.
             LivingEntityDropFromLootTableAccessor.invokeDropFromLootTable(victim, source,
                     event.isRecentlyHit());
             announceFirstTrophy(victim);
@@ -111,15 +124,25 @@ public final class HunterListener {
      * needing a real {@link LivingDropsEvent}.
      */
     static void onDeathForTesting(@NotNull LivingEntity victim, @NotNull DamageSource source) {
-        final ServerPlayer killer = qualifyingKiller(victim, source);
-        if (killer == null) {
-            return;
-        }
-        final McMMOPlayer mmoPlayer = hunterPlayer(killer);
+        final McMMOPlayer mmoPlayer = qualifyingHunterPlayer(victim, source);
         if (mmoPlayer == null) {
             return;
         }
         recordKillAndAwardXp(mmoPlayer, victim, mmoPlayer.getHunterManager());
+    }
+
+    /**
+     * The shared preamble of {@link #onLivingDrops} and {@link #onDeathForTesting}: run the kill
+     * qualification gates, then load the killer's mcMMO/Hunter data, returning {@code null} if either
+     * step fails. Extracted so the two entry points cannot silently drift apart.
+     */
+    private static @Nullable McMMOPlayer qualifyingHunterPlayer(@NotNull LivingEntity victim,
+            @NotNull DamageSource source) {
+        final ServerPlayer killer = qualifyingKiller(victim, source);
+        if (killer == null) {
+            return null;
+        }
+        return hunterPlayer(killer);
     }
 
     private static void recordKillAndAwardXp(@NotNull McMMOPlayer mmoPlayer,
@@ -143,7 +166,8 @@ public final class HunterListener {
      */
     static boolean qualifiesForTrophyRoll(@NotNull LivingEntity victim, @NotNull DamageSource source,
             @NotNull HunterManager hunter) {
-        return qualifyingKiller(victim, source) != null;
+        return qualifyingKiller(victim, source) != null
+                && hunter.rollTrophyDrop(MobTiers.tierOf(victim));
     }
 
     /**
