@@ -3,8 +3,10 @@ package com.gmail.nossr50.neoforge.listeners;
 import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.skills.SubSkillType;
+import com.gmail.nossr50.datatypes.treasure.EnchantmentTreasure;
 import com.gmail.nossr50.datatypes.treasure.FishingTreasure;
 import com.gmail.nossr50.datatypes.treasure.FishingTreasureBook;
+import com.gmail.nossr50.datatypes.treasure.Rarity;
 import com.gmail.nossr50.datatypes.treasure.ShakeTreasure;
 import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.CombatUtils;
@@ -18,11 +20,20 @@ import com.gmail.nossr50.util.skills.RankUtils;
 import com.gmail.nossr50.util.text.ConfigStringUtils;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.FluidTags;
@@ -35,6 +46,8 @@ import net.minecraft.world.entity.projectile.FishingHook;
 import net.minecraft.world.entity.vehicle.Boat;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.BlockHitResult;
@@ -88,11 +101,14 @@ import org.jetbrains.annotations.VisibleForTesting;
  * <p><b>Master Angler is wired</b> ({@link #resolveWaitCountdown} + {@link #masterAnglerWaitTimes}):
  * see {@link #resolveWaitCountdown}'s javadoc.
  *
- * <p><b>Magic Hunter and enchanted-book treasures are deferred to a later task</b> — this task wires
- * the {@code maybeCatchTreasure} control flow that reaches the enchant hooks, but their bodies are
- * still stubs: {@link #applyBookEnchantment} and {@link #maybeApplyMagicHunter} always return
- * {@code false} — no enchantment applied (Task D). A no-op/false stub means the corresponding perk is
- * simply inert, not broken, until its task lands.
+ * <p><b>Magic Hunter and enchanted-book treasures are wired</b> ({@link #maybeApplyMagicHunter} +
+ * {@link #applyBookEnchantment}): a caught treasure may arrive enchanted, resolved against the
+ * player's live (dynamic) enchantment registry and written with the same
+ * {@link EnchantmentHelper#updateEnchantments} surface Arcane Forging uses. Conflict detection
+ * ({@link #conflictsWithAny}) is a genuine reimplementation, not a mechanical port: 1.21 removed the
+ * static {@code Enchantment.canBeCombined(a, b)} helper as part of the data-driven enchantment
+ * rework, so "do these two enchantments conflict" is rebuilt here from each enchantment's own
+ * {@link Enchantment#exclusiveSet()}. See that method's javadoc for the exact semantics.
  */
 public final class FishingListener {
 
@@ -294,29 +310,200 @@ public final class FishingListener {
     }
 
     /**
-     * <b>Stub — Task D.</b> Enchant a fished {@link FishingTreasureBook}. Always returns {@code false}
-     * (no enchantment applied) until Task D lands; {@link #maybeCatchTreasure} still builds and awards
-     * the book itself, it just arrives unenchanted in the meantime. Parameter list matches the Fabric
-     * original's (retargeted to official mappings) so Task D does not have to touch this call site.
+     * Enchant a fished {@link FishingTreasureBook}. Ports the Fabric original's
+     * {@code applyBookEnchantment}: resolve every enchantment this world's (dynamic) registry knows,
+     * warn about any whitelist entry that names none of them, build the book's legal
+     * (enchantment, level) pool via {@link FishingTreasureBook#resolveAllowedEnchantmentIds}, and hand
+     * it to {@link FishingManager#pickBookEnchantment} for the single draw.
      *
      * @return whether an enchantment was applied (the caller sends the notification if so)
      */
     private static boolean applyBookEnchantment(ServerPlayer serverPlayer,
             FishingManager fishingManager, FishingTreasureBook book, ItemStack treasureStack,
             ThreadLocalRandom rng) {
-        return false;
+        final Map<String, Holder<Enchantment>> byId = new LinkedHashMap<>();
+        final Registry<Enchantment> enchantmentRegistry = serverPlayer.registryAccess()
+                .registryOrThrow(Registries.ENCHANTMENT);
+        enchantmentRegistry.holders().forEach(holder ->
+                byId.put(holder.key().location().getPath(), holder));
+        warnUnknownWhitelistedEnchantments(book, byId.keySet());
+
+        final List<EnchantmentTreasure> pool = new ArrayList<>();
+        for (String enchantmentId : book.resolveAllowedEnchantmentIds(byId.keySet())) {
+            final int maxLevel = byId.get(enchantmentId).value().getMaxLevel();
+            for (int level = 1; level <= maxLevel; level++) {
+                pool.add(new EnchantmentTreasure(enchantmentId, level));
+            }
+        }
+
+        final Optional<EnchantmentTreasure> picked = fishingManager.pickBookEnchantment(pool,
+                rng::nextInt);
+        if (picked.isEmpty()) {
+            McMMOMod.LOGGER.warn("A fished enchanted book had no legal enchantment to roll — its"
+                    + " Enchantments_Blacklist in fishing_treasures.yml excludes every enchantment"
+                    + " this world has. Dropping the book unenchanted.");
+            return false;
+        }
+
+        final Holder<Enchantment> holder = byId.get(picked.get().enchantmentId());
+        final int level = picked.get().level();
+        EnchantmentHelper.updateEnchantments(treasureStack, mutable -> mutable.set(holder, level));
+        return true;
     }
 
     /**
-     * <b>Stub — Task D.</b> Magic Hunter: enchant a caught treasure. Always returns {@code false} (no
-     * enchantment applied) until Task D lands. Parameter list matches the Fabric original's
-     * (retargeted to official mappings) so Task D does not have to touch this call site.
+     * Report whitelist entries that name no enchantment in this world — legacy's load-time
+     * "[Fishing Treasure Init] Could not find any enchantments which matched..." debug, moved to drop
+     * time because the registry does not exist at config load. Worth a warning rather than a debug: a
+     * whitelist whose every name is a typo silently degrades to "allow everything" (the precedence
+     * {@link FishingTreasureBook#resolveAllowedEnchantmentIds} preserves), so the operator sees a
+     * working book doing the opposite of what they configured.
+     */
+    private static void warnUnknownWhitelistedEnchantments(FishingTreasureBook book,
+            Set<String> knownEnchantmentIds) {
+        for (String enchantmentId : book.getWhitelistedEnchantmentIds()) {
+            if (!knownEnchantmentIds.contains(enchantmentId)) {
+                McMMOMod.LOGGER.warn("Enchanted-book Enchantments_Whitelist entry '{}' in"
+                        + " fishing_treasures.yml names no enchantment in this world's registry —"
+                        + " ignoring it.", enchantmentId);
+            }
+        }
+    }
+
+    /**
+     * Magic Hunter: enchant a caught treasure. Ports the Fabric original's
+     * {@code maybeApplyMagicHunter} — the MC-typed half of legacy {@code FishingManager#processMagicHunter}
+     * — owning three things that need Minecraft:
+     *
+     * <ol>
+     *   <li><b>Resolving the registry paths.</b> 1.21 enchantments live in a <i>dynamic</i>
+     *       (datapack-driven) registry, so they cannot be resolved when {@code FishingTreasureConfig}
+     *       loads — the table holds {@link EnchantmentTreasure} paths and we look them up here off the
+     *       player's {@code RegistryAccess}.</li>
+     *   <li><b>Filtering to applicable enchantments</b> — legacy {@code getPossibleEnchantments}, whose
+     *       Bukkit {@code canEnchantItem} is vanilla's {@code Enchantment#isSupportedItem}.</li>
+     *   <li><b>Writing the enchantments</b>, via {@link EnchantmentHelper#updateEnchantments}, which
+     *       applies no level restriction — exactly legacy's {@code addUnsafeEnchantments}.</li>
+     * </ol>
+     *
+     * <p>Gated on {@link FishingManager#isMagicHunterEnabled()} and on the drop being enchantable at
+     * all (legacy {@code ItemUtils.isEnchantable}, kept as the mcMMO {@code MaterialMapStore}
+     * whitelist).
      *
      * @return whether any enchantment was applied (the caller sends the notification if so)
      */
     private static boolean maybeApplyMagicHunter(ServerPlayer serverPlayer,
             FishingManager fishingManager, ItemStack treasureStack, ThreadLocalRandom rng) {
+        if (!fishingManager.isMagicHunterEnabled()) {
+            return false;
+        }
+        final String itemId = BuiltInRegistries.ITEM.getKey(treasureStack.getItem()).getPath();
+        if (!McMMOMod.getMaterialMapStore().isEnchantable(itemId)) {
+            return false;
+        }
+
+        final Optional<Rarity> rarity = fishingManager.rollMagicHunterRarity(
+                rng.nextDouble() * 100.0);
+        if (rarity.isEmpty()) {
+            return false; // the enchant roll cleared every band — an ordinary unenchanted treasure.
+        }
+
+        final Registry<Enchantment> enchantmentRegistry = serverPlayer.registryAccess()
+                .registryOrThrow(Registries.ENCHANTMENT);
+        final Map<String, Holder<Enchantment>> resolved = new HashMap<>();
+        final List<EnchantmentTreasure> candidates = new ArrayList<>();
+
+        for (EnchantmentTreasure candidate : McMMOMod.getFishingTreasureConfig()
+                .getEnchantmentTreasures(rarity.get())) {
+            final ResourceLocation id = ResourceLocation.tryParse(candidate.enchantmentId());
+            final Optional<Holder.Reference<Enchantment>> entry = id == null
+                    ? Optional.empty()
+                    : enchantmentRegistry.getHolder(id);
+
+            if (entry.isEmpty()) {
+                McMMOMod.LOGGER.warn("Skipping unknown Magic Hunter enchantment '{}' ({} band in"
+                        + " fishing_treasures.yml) — no such enchantment in this world's registry.",
+                        candidate.enchantmentId(), rarity.get());
+                continue;
+            }
+            if (!entry.get().value().isSupportedItem(treasureStack)) {
+                continue; // legacy getPossibleEnchantments: this enchantment doesn't fit this item.
+            }
+
+            resolved.put(candidate.enchantmentId(), entry.get());
+            candidates.add(candidate);
+        }
+
+        if (candidates.isEmpty()) {
+            return false;
+        }
+
+        // Legacy shuffles so the halving walk doesn't permanently favour whoever is first in the file.
+        Collections.shuffle(candidates, rng);
+
+        final Set<Holder<Enchantment>> alreadyOnItem = treasureStack.getTagEnchantments().keySet();
+        final List<EnchantmentTreasure> chosen = fishingManager.selectMagicHunterEnchants(candidates,
+                (selectedSoFar, candidate) -> conflictsWithAny(alreadyOnItem, selectedSoFar, resolved,
+                        candidate),
+                rng::nextInt);
+
+        if (chosen.isEmpty()) {
+            return false;
+        }
+
+        EnchantmentHelper.updateEnchantments(treasureStack, mutable -> {
+            for (EnchantmentTreasure treasure : chosen) {
+                mutable.set(resolved.get(treasure.enchantmentId()), treasure.level());
+            }
+        });
+        return true;
+    }
+
+    /**
+     * Whether {@code candidate} conflicts with anything already on the item or already picked in this
+     * roll. Ports legacy's {@code ItemMeta#hasConflictingEnchant}, whose CraftBukkit implementation was
+     * vanilla's {@code Enchantment#canBeCombined}: not the same enchantment, and in neither party's
+     * {@code exclusiveSet}.
+     *
+     * <p><b>Reimplemented, not ported.</b> 1.21's data-driven enchantment rework removed the static
+     * {@code Enchantment.canBeCombined(a, b)} helper this logic used to call. Its replacement is built
+     * here from each enchantment's own instance method {@link Enchantment#exclusiveSet()} — a
+     * {@code HolderSet<Enchantment>} of everything that enchantment refuses to share an item with. Two
+     * enchantments {@code a} and {@code b} conflict when {@code a} is the same enchantment as {@code b},
+     * or {@code a}'s exclusive set contains {@code b}, or {@code b}'s exclusive set contains {@code a} —
+     * checked both directions because vanilla's data is not guaranteed symmetric (e.g. one enchantment
+     * could list an exclusion the other side doesn't declare back), matching legacy's original
+     * two-sided {@code canBeCombined} semantics.
+     *
+     * <p>The {@code selectedSoFar} half is this port's deviation — see
+     * {@link FishingManager#selectMagicHunterEnchants} for why upstream's guard never fires.
+     */
+    @VisibleForTesting
+    static boolean conflictsWithAny(Set<Holder<Enchantment>> alreadyOnItem,
+            List<EnchantmentTreasure> selectedSoFar,
+            Map<String, Holder<Enchantment>> resolved, EnchantmentTreasure candidate) {
+        final Holder<Enchantment> entry = resolved.get(candidate.enchantmentId());
+
+        for (Holder<Enchantment> existing : alreadyOnItem) {
+            if (conflicts(existing, entry)) {
+                return true;
+            }
+        }
+        for (EnchantmentTreasure selected : selectedSoFar) {
+            if (conflicts(resolved.get(selected.enchantmentId()), entry)) {
+                return true;
+            }
+        }
         return false;
+    }
+
+    /**
+     * The per-pair conflict predicate {@link #conflictsWithAny} applies to every existing enchantment:
+     * the same enchantment, or either side's {@link Enchantment#exclusiveSet()} naming the other.
+     */
+    private static boolean conflicts(Holder<Enchantment> a, Holder<Enchantment> b) {
+        return a.equals(b) || a.value().exclusiveSet().contains(b)
+                || b.value().exclusiveSet().contains(a);
     }
 
     /**
