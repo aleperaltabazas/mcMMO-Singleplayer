@@ -203,50 +203,30 @@ public final class McTestRegistries {
      * A real (non-mocked) {@link LivingEntity} of the given type, for bytecode-level testing
      * (mixins, etc.) that mocks cannot reach.
      *
-     * <p>Creates entities via direct constructor invocation with a highly-mocked Level object.
-     * Only known entity types are supported; this is sufficient for testing @Invoker mixins.
+     * <p>Creates entities via direct constructor invocation with a comprehensively-mocked Level.
+     * The entity is real and bytecode-woven by Mixin; only the Level is stubbed.
      *
      * @param type the entity type to create
      * @return a real bytecode-woven entity instance
      * @throws RuntimeException if the type cannot be instantiated
      */
     public static LivingEntity newHeadlessEntity(EntityType<?> type) {
-        // Create a level mock with comprehensive default answers for ANY method call
+        // Create a level mock. Zombie's constructor may call level.registryAccess(),
+        // level.getMinecraftServer(), level.getGameRules(), etc. Use RETURNS_DEEP_STUBS
+        // so that chained calls (e.g. level.registryAccess().lookupOrThrow(...)) don't fail.
         final Level level = Mockito.mock(Level.class,
-                Mockito.withSettings().defaultAnswer(inv -> {
-                    final String methodName = inv.getMethod().getName();
-                    final Class<?> retType = inv.getMethod().getReturnType();
-
-                    // Provide sensible defaults based on return type
-                    if (retType == boolean.class) {
-                        return "isClientSide".equals(methodName) ? false : false;
-                    } else if (retType == int.class) {
-                        return 0;
-                    } else if (retType == long.class) {
-                        return 0L;
-                    } else if (retType == float.class) {
-                        return 0.0f;
-                    } else if (retType == double.class) {
-                        return 0.0d;
-                    } else if (retType == void.class) {
-                        return null;
-                    } else {
-                        // For object types, return a mock
-                        return Mockito.mock(retType);
-                    }
-                }));
-
+                Mockito.withSettings().defaultAnswer(Mockito.RETURNS_DEEP_STUBS));
         Mockito.when(level.isClientSide()).thenReturn(false);
 
-        // Map known entity types to their classes
-        Class<?> entityClass;
+        // Map entity types to their concrete classes
+        Class<?> entityClass = null;
         if (type == EntityType.ZOMBIE) {
             entityClass = Zombie.class;
         } else {
-            throw new RuntimeException("Entity type " + type + " not supported by newHeadlessEntity");
+            throw new RuntimeException("Entity type " + type + " is not supported by newHeadlessEntity");
         }
 
-        // Try to instantiate via the (Level) constructor
+        // Try to instantiate via the (Level) constructor.
         try {
             final var constructor = entityClass.getDeclaredConstructor(Level.class);
             constructor.setAccessible(true);
@@ -254,19 +234,16 @@ public final class McTestRegistries {
             if (entity != null) {
                 return entity;
             }
+            throw new RuntimeException("EntityType constructor returned null");
         } catch (java.lang.reflect.InvocationTargetException ex) {
-            // The constructor itself threw an exception, most likely IllegalStateException
-            // from level.registryAccess() or similar. Wrap with details for debugging.
-            final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-            throw new RuntimeException("Failed to instantiate " + entityClass + ": " + cause.getClass().getSimpleName()
-                    + " " + cause.getMessage(), cause);
-        } catch (NoSuchMethodException ex) {
-            throw new RuntimeException("Entity class " + entityClass + " lacks (Level) constructor", ex);
+            final Throwable cause = ex.getCause();
+            throw new RuntimeException("Cannot create real " + entityClass.getSimpleName()
+                    + " in a test environment with only a mocked Level. The entity constructor "
+                    + "requires real vanilla infrastructure (registries, server, etc.). "
+                    + "Error: " + cause.getClass().getSimpleName() + ": " + cause.getMessage(), cause);
         } catch (Exception ex) {
-            // Wrap the underlying error
-            throw new RuntimeException("Failed to instantiate " + entityClass + ": " + ex.getMessage(), ex);
+            throw new RuntimeException("Failed to instantiate " + entityClass.getSimpleName()
+                    + ": " + ex.getClass().getSimpleName() + ": " + ex.getMessage(), ex);
         }
-
-        throw new RuntimeException("Entity instantiation returned null for type " + type);
     }
 }
