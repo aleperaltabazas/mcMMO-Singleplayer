@@ -17,6 +17,7 @@ import com.gmail.nossr50.event.SimpleEventBus;
 import com.gmail.nossr50.neoforge.commands.McMMOCommands;
 import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
 import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
+import com.gmail.nossr50.neoforge.listeners.HunterListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
@@ -218,6 +219,9 @@ public final class McMMOMod {
         // Demolitions Expertise, and Taming/Unarmed's cancel-only veto branches). Mixin-driven
         // (LivingEntityDamageMixin) plus its own ALLOW_DAMAGE-equivalent event registration.
         EntityDamageListener.register();
+
+        // Hunter kill-counter + Trophy Hunter (docs/superpowers/plans/2026-08-28-hunter-listener-plan.md).
+        HunterListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
