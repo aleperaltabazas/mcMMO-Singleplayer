@@ -4,7 +4,9 @@ import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.treasure.FishingTreasure;
 import com.gmail.nossr50.datatypes.treasure.FishingTreasureBook;
+import com.gmail.nossr50.datatypes.treasure.ShakeTreasure;
 import com.gmail.nossr50.neoforge.McMMOMod;
+import com.gmail.nossr50.platform.CombatUtils;
 import com.gmail.nossr50.platform.ItemSpecBuilder;
 import com.gmail.nossr50.platform.PlatformItem;
 import com.gmail.nossr50.skills.fishing.FishingManager;
@@ -16,14 +18,23 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.animal.Sheep;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.projectile.FishingHook;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import org.jetbrains.annotations.VisibleForTesting;
 
 /**
@@ -62,13 +73,21 @@ import org.jetbrains.annotations.VisibleForTesting;
  * the {@code OverFishLimit} on one spot the catch is confiscated outright, on top of the XP and
  * treasure roll the exploit gate already skipped.
  *
- * <p><b>Shake, Ice Fishing, Master Angler, Magic Hunter, and enchanted-book treasures are deferred to
- * later tasks</b> — this task wires the mixin seams that call them and the {@code maybeCatchTreasure}
- * control flow that reaches them, but their bodies are stubs: {@link #onEntityHooked} and
- * {@link #tryIceFishing} are no-ops (Task B); {@link #resolveWaitCountdown} always falls through to
- * an unmodified vanilla draw (Task C); {@link #applyBookEnchantment} and
- * {@link #maybeApplyMagicHunter} always return {@code false} — no enchantment applied (Task D). A
- * no-op/false stub means the corresponding perk is simply inert, not broken, until its task lands.
+ * <p><b>Shake is wired</b> ({@link #onEntityHooked} + {@link #shearIfWool}): reeling in a hooked mob
+ * rolls the Shake sub-skill, spawns its configured drop, and deals mcMMO's own damage — see
+ * {@link #onEntityHooked}'s javadoc.
+ *
+ * <p><b>Ice Fishing is wired</b> ({@link #tryIceFishing} + {@link #sitsOverWater} + {@link #meltIce}):
+ * reeling in a hook stuck on an ice sheet over water melts a 3&times;3 hole — see
+ * {@link #tryIceFishing}'s javadoc, including its documented "no auto-recast" deviation.
+ *
+ * <p><b>Master Angler, Magic Hunter, and enchanted-book treasures are deferred to later tasks</b> —
+ * this task wires the mixin seam that calls {@link #resolveWaitCountdown} and the
+ * {@code maybeCatchTreasure} control flow that reaches the enchant hooks, but their bodies are still
+ * stubs: {@link #resolveWaitCountdown} always falls through to an unmodified vanilla draw (Task C);
+ * {@link #applyBookEnchantment} and {@link #maybeApplyMagicHunter} always return {@code false} — no
+ * enchantment applied (Task D). A no-op/false stub means the corresponding perk is simply inert, not
+ * broken, until its task lands.
  */
 public final class FishingListener {
 
@@ -308,24 +327,191 @@ public final class FishingListener {
     }
 
     /**
-     * <b>Stub — Task B.</b> Shake: a player reels in a mob they hooked. A safe no-op until Task B
-     * lands — nothing calls this from {@link FishingListener} itself, only
-     * {@link com.gmail.nossr50.neoforge.mixin.FishingHookRetrieveMixin}'s already-wired injector, so
-     * an empty body simply makes Shake inert rather than broken.
+     * Shake: a player reels in a mob they hooked, and it drops something. Ports legacy
+     * {@code FishingManager#shakeCheck}, reached from the {@code CAUGHT_ENTITY} arm of the legacy
+     * {@code PlayerFishEvent} monitor. Called from
+     * {@link com.gmail.nossr50.neoforge.mixin.FishingHookRetrieveMixin} at the {@code pullEntity}
+     * call inside {@code FishingHook#retrieve} — i.e. <i>before</i> vanilla yanks the mob, which is
+     * exactly where CraftBukkit fired that event.
+     *
+     * <p>Unlike {@link #onFishCaught}, no anti-exploit gate applies: legacy's spam/same-spot checks
+     * guard only the {@code CAUGHT_FISH} state.
+     *
+     * <p>Legacy's trailing {@code setFishingTarget()} is dropped for the same reason Master Angler
+     * drops it — it discards the value it computes. Dropped with it: the {@code PLAYER} arm (the
+     * player-head owner stamp and the {@code INVENTORY} steal), unreachable in singleplayer where the
+     * only player is the angler — an honest collapse, the same call made for Daze and for Unarmed's
+     * Disarm/Iron Grip (which were removed outright rather than left as a dead surface; see
+     * {@code SubSkillType}).
      *
      * @param hook the hook being reeled in (source of the owner and the hooked entity)
      */
     public static void onEntityHooked(FishingHook hook) {
+        if (!(hook.getHookedIn() instanceof LivingEntity target)) {
+            return; // legacy canShake's `target instanceof LivingEntity` half (a hooked boat/item).
+        }
+        if (!(hook.getPlayerOwner() instanceof ServerPlayer serverPlayer)) {
+            return; // client-side / null owner.
+        }
+        if (!(target.level() instanceof ServerLevel level)) {
+            return; // the drop spawn and the damage are server-side only.
+        }
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(serverPlayer.getUUID());
+        if (mmoPlayer == null) {
+            return; // data not loaded (e.g. mid-join).
+        }
+        final FishingManager fishingManager = mmoPlayer.getFishingManager();
+        if (fishingManager == null || !fishingManager.canShake()
+                || !fishingManager.rollShakeSuccess()) {
+            return;
+        }
+
+        final String entityPath = BuiltInRegistries.ENTITY_TYPE.getKey(target.getType()).getPath();
+        final Optional<ShakeTreasure> rolled = fishingManager.rollShakeTreasure(entityPath,
+                ThreadLocalRandom.current().nextInt(100));
+        if (rolled.isEmpty()) {
+            return; // this mob has no configured drops, or the roll cleared them all.
+        }
+        final Optional<ItemStack> built = ItemSpecBuilder.build(rolled.get().getDrop());
+        if (built.isEmpty()) {
+            return; // unknown material or potion type (logged by the builder) — no drop, no damage.
+        }
+        // Built before shearing so an unresolvable material can never shear a sheep for nothing.
+        // Legacy could not hit that case (it held a real ItemStack from config load), so this is
+        // order-only.
+        if (!shearIfWool(target, rolled.get().getDrop().getMaterialId())) {
+            return; // an already-sheared sheep: legacy bails entirely — no drop, no damage, no XP.
+        }
+
+        final ItemEntity drop = new ItemEntity(level, target.getX(), target.getY(), target.getZ(),
+                built.get());
+        drop.setDefaultPickUpDelay(); // Bukkit's World#dropItem behaviour.
+        level.addFreshEntity(drop);
+
+        // Attributed to the player, so it is mcMMO's own damage: the K1 seam passes it through and it
+        // pays no combat XP — the role legacy's CUSTOM_DAMAGE marker played.
+        CombatUtils.safeDealDamage(target, FishingManager.shakeDamage(target.getMaxHealth()),
+                serverPlayer);
+        fishingManager.awardShakeXP();
     }
 
     /**
-     * <b>Stub — Task B.</b> Ice Fishing: reeling in a hook whose bobber is stuck on an ice sheet over
-     * water melts a hole so the player can fish there. A safe no-op until Task B lands — see
-     * {@link #onEntityHooked}'s javadoc for why an empty body is the right shape here.
+     * Legacy's {@code SHEEP} arm of {@code shakeCheck}: shaking wool off a sheep shears it, and a
+     * sheep that is already sheared yields nothing. A no-op (returning {@code true}) for any other
+     * mob, or for a non-wool drop off a sheep.
+     *
+     * @param target     the shaken mob
+     * @param materialId the rolled drop's registry path, e.g. {@code "white_wool"}
+     * @return whether the shake may proceed
+     */
+    @VisibleForTesting
+    static boolean shearIfWool(LivingEntity target, String materialId) {
+        if (!(target instanceof Sheep sheep) || !materialId.endsWith("wool")) {
+            return true;
+        }
+        if (sheep.isSheared()) {
+            return false;
+        }
+        sheep.setSheared(true);
+        return true;
+    }
+
+    /**
+     * Ice Fishing: reeling in a rod whose bobber is stuck on an ice sheet over water melts a
+     * 3&times;3 hole so the player can fish there. Ports legacy {@code FishingManager#iceFishing},
+     * reached from the {@code IN_GROUND} arm of the legacy {@code PlayerFishEvent} monitor.
+     *
+     * <p><b>Seam.</b> Modern vanilla has no {@code IN_GROUND} state (the {@code State} enum is only
+     * {@code FLYING/HOOKED_IN_ENTITY/BOBBING}); that state was a CraftBukkit synthesis fired when the
+     * player reeled a bobber resting on solid ground. So this runs at the {@code HEAD} of
+     * {@code FishingHook#retrieve} (the reel), the same method the catch/shake seams use, and
+     * reconstructs the precondition without the private state: the hook has no hooked entity (that is
+     * the Shake path) and is <em>not</em> sitting in water (a bobbing/caught hook is, a stuck-on-ice
+     * one is not). Legacy resolved the ice block from {@code player.getTargetBlock(null, 100)} — the
+     * player's crosshair, not the bobber — so this raycasts (now {@link net.minecraft.world.entity.Entity#pick})
+     * the player likewise.
+     *
+     * <p><b>Body-of-water check.</b> Legacy required the block 3 below to be water <em>or</em> an icy
+     * biome. There is no stable vanilla "icy biome" tag, and a genuine frozen lake/ocean has water
+     * within a few blocks of its surface regardless of biome, so this scans the 1–4 blocks under the
+     * ice for water and drops the biome-OR shortcut (documented deviation; guards against melting a
+     * decorative ice block with nothing beneath it). Legacy's {@code EventUtils.simulateBlockBreak}
+     * protection probe is dropped on {@link FishingManager#canIceFish()} as elsewhere.
+     *
+     * <p><b>Deviation — no auto-recast.</b> Legacy recast the hook in place
+     * ({@code EventUtils.callFakeFishEvent}) so the reel that melted the ice immediately dropped the
+     * line into the new water. That needs bespoke bobber-spawn glue (a fresh {@code FishingHook} wired
+     * to the player's active hook); it is deferred as a UX nicety. The reel still discards its hook as
+     * normal, so the player simply casts again into the fresh hole. <b>§G:</b> the whole path is
+     * interaction-driven and unverified headless — confirm the reel-on-ice melt and the recast feel.
      *
      * @param hook the hook being reeled in (source of the owner and the world)
      */
     public static void tryIceFishing(FishingHook hook) {
+        if (hook.getHookedIn() != null) {
+            return; // a hooked mob is the Shake path, not a stuck-on-ice reel.
+        }
+        if (!(hook.getPlayerOwner() instanceof ServerPlayer serverPlayer)) {
+            return; // client-side / null owner.
+        }
+        if (!(hook.level() instanceof ServerLevel level)) {
+            return; // the block reads and the melt are server-side only.
+        }
+        // Reconstruct legacy's IN_GROUND precondition: a hook in water is bobbing/caught, not stuck.
+        if (level.getFluidState(hook.blockPosition()).is(FluidTags.WATER)) {
+            return;
+        }
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(serverPlayer.getUUID());
+        if (mmoPlayer == null) {
+            return; // data not loaded (e.g. mid-join).
+        }
+        final FishingManager fishingManager = mmoPlayer.getFishingManager();
+        if (fishingManager == null || !fishingManager.canIceFish()) {
+            return;
+        }
+
+        final HitResult hit = serverPlayer.pick(100.0, 1.0F, false);
+        if (hit.getType() != HitResult.Type.BLOCK) {
+            return;
+        }
+        final BlockPos target = ((BlockHitResult) hit).getBlockPos();
+        if (!level.getBlockState(target).is(Blocks.ICE) || !sitsOverWater(level, target)) {
+            return;
+        }
+
+        // Melt the clicked ice and its 8 horizontal neighbours into water — legacy's 3x3 hole.
+        meltIce(level, target);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                final BlockPos neighbour = target.offset(dx, 0, dz);
+                if (level.getBlockState(neighbour).is(Blocks.ICE)) {
+                    meltIce(level, neighbour);
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether an ice block sits over a body of water: any of the 1–4 blocks directly beneath it is
+     * water (see {@link #tryIceFishing} for why the scan replaces legacy's exact "3 below or icy
+     * biome").
+     */
+    @VisibleForTesting
+    static boolean sitsOverWater(ServerLevel level, BlockPos icePos) {
+        for (int dy = 1; dy <= 4; dy++) {
+            if (level.getFluidState(icePos.below(dy)).is(FluidTags.WATER)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Turns one block into a water source — legacy {@code block.setType(Material.WATER)}. */
+    private static void meltIce(ServerLevel level, BlockPos pos) {
+        level.setBlockAndUpdate(pos, Blocks.WATER.defaultBlockState());
     }
 
     /**
