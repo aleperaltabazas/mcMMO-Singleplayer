@@ -1,0 +1,79 @@
+package com.gmail.nossr50.neoforge.mixin;
+
+import com.gmail.nossr50.neoforge.listeners.FishingListener;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.entity.projectile.FishingHook;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Slice;
+
+/**
+ * The Master Angler seam: shortens how long a hook waits for a bite. Replaces legacy's
+ * {@code MasterAnglerTask}, which ran a tick after the Bukkit {@code PlayerFishEvent} and mutated
+ * the {@code FishHook} through {@code setMinWaitTime}/{@code setMaxWaitTime}/{@code setApplyLure} —
+ * none of which vanilla exposes.
+ *
+ * <p><b>The seam.</b> Bytecode-verified against the patched source,
+ * {@code FishingHook#catchingFish} (the official-mapped rename of Fabric's
+ * {@code tickFishingLogic}) ends with the <i>only</i> place a fresh wait is drawn:
+ *
+ * <pre>{@code
+ * this.timeUntilLured = Mth.nextInt(this.random, 100, 600);
+ * this.timeUntilLured = this.timeUntilLured - this.lureSpeed;
+ * }</pre>
+ *
+ * <p>Those hardcoded {@code 100}/{@code 600} are exactly what Bukkit's {@code FishHook#getMinWaitTime}
+ * / {@code getMaxWaitTime} returned by default, so redirecting this one call gives us legacy's three
+ * API calls at once: the redirect receives vanilla's own bounds (nothing hardcoded here), draws from
+ * the mcMMO-reduced range instead, and — since the reduction was already folded into the max-wait
+ * bonus — adds {@code lureSpeed} back so the subtraction on the next line cancels out. That add-back
+ * <i>is</i> legacy's {@code setApplyLure(false)}, which existed to dodge a Minecraft bug where Lure
+ * above level 3 breaks fishing.
+ *
+ * <p>{@code catchingFish} casts the level to {@code ServerLevel} on its first line, so it is
+ * server-only and needs no client guard. The redirect is anchored with a {@link Slice} starting at
+ * the {@code 600} constant rather than by ordinal — {@code catchingFish} makes two other
+ * {@code Mth.nextInt} calls (bytecode-verified: {@code (20, 40)} for the nibble timer and
+ * {@code (20, 80)} for the hook timer) and we must not touch those.
+ *
+ * <p><b>{@code allow = 1} is load-bearing, not decoration.</b> An unconstrained redirect here would
+ * silently hijack the nibble and hook countdowns as well, corrupting vanilla fishing timings for
+ * everyone — see {@code defaultRequire = 1} in {@code mcmmo.mixins.json}, which turns an unexpected
+ * binding count into a loud startup failure. Any future slice-anchored injector in this mod wants the
+ * same guard.
+ *
+ * <p><b>Deviation from legacy (documented):</b> legacy applied Master Angler once per cast; this
+ * fires on every wait redraw, so a cast that cycles through several bite windows keeps the bonus
+ * instead of reverting to vanilla timings after the first. The gates are also read at draw time
+ * rather than at cast time, so swapping the rod out mid-cast changes the next wait.
+ */
+@Mixin(FishingHook.class)
+public abstract class FishingHookWaitTimeMixin {
+
+    /**
+     * Vanilla's Lure reduction in ticks (100 per enchantment level), set once in the constructor. Read
+     * only — we hand it to the listener so it can reproduce legacy's {@code convertedLureBonus}
+     * without an enchantment-registry lookup. Renamed from yarn's {@code waitTimeReductionTicks}.
+     */
+    @Shadow
+    @Final
+    private int lureSpeed;
+
+    @Redirect(
+            method = "catchingFish",
+            slice = @Slice(from = @At(value = "CONSTANT", args = "intValue=600")),
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/util/Mth;nextInt("
+                            + "Lnet/minecraft/util/RandomSource;II)I"),
+            require = 1,
+            allow = 1)
+    private int mcmmo$masterAnglerWaitCountdown(RandomSource random, int minWaitTicks,
+            int maxWaitTicks) {
+        return FishingListener.resolveWaitCountdown((FishingHook) (Object) this, random,
+                minWaitTicks, maxWaitTicks, this.lureSpeed);
+    }
+}

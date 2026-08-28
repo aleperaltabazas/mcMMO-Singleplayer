@@ -1,0 +1,114 @@
+package com.gmail.nossr50.neoforge.mixin;
+
+import com.gmail.nossr50.neoforge.listeners.FishingListener;
+import java.util.Collection;
+import net.minecraft.world.entity.projectile.FishingHook;
+import net.minecraft.world.item.ItemStack;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+/**
+ * The K7 Fishing hook: detects when a player reels in a catch. Vanilla fires no plain "catch" event
+ * usable for mutation here — NeoForge's own {@code ItemFishedEvent} is a dead end for this purpose,
+ * see the design doc's Mojang-Mapping Verification section — so this taps the one unambiguous seam
+ * inside {@code FishingHook#retrieve} (the official-mapped rename of Fabric's {@code use}): the
+ * {@code CriteriaTriggers.FISHING_ROD_HOOKED.trigger(player, rod, hook, caughtLoot)} call. Its fourth
+ * argument is the caught-loot {@code Collection<ItemStack>}, so a {@link ModifyArg} on that argument
+ * gives us the exact items with no local-variable capture (robust across mappings).
+ *
+ * <p>{@code retrieve} runs only server-side (it early-returns when the level is client or the owner
+ * is null before any trigger call), so no client guard is needed here. The criterion also fires for
+ * the reel-in-a-hooked-entity branch, but there vanilla passes {@code Collections.emptyList()} — the
+ * listener treats an empty collection as a no-op.
+ *
+ * <p>The fourth argument is the very same {@code List} that {@code retrieve} then iterates to spawn
+ * the reeled-in item entities and orbs (bytecode-verified against the patched source: the criterion
+ * call and the spawn loop both read the one local {@code list} variable), so the listener may mutate
+ * it in place to inject a Treasure Hunter reward — that reward then flies to the player exactly like
+ * a normal catch. We return the (possibly mutated) collection; mutating it also lets the criterion
+ * see the reward, a harmless advancement-trigger deviation.
+ *
+ * <p><b>The second injector is the Shake seam</b> (legacy's {@code CAUGHT_ENTITY} state). Bytecode
+ * verified: within {@code retrieve} there is exactly one {@code this.pullEntity(this.hookedIn)} call,
+ * on the {@code this.hookedIn != null} branch — injecting there is both unambiguous and faithfully
+ * ordered: CraftBukkit fired {@code PlayerFishEvent} <i>before</i> performing the pull, so mcMMO's
+ * shake runs first there too. The hooked entity is read back through the public
+ * {@code getHookedIn()} (still set at this point; only {@code remove} clears it), which keeps the
+ * mixin free of local capture. (A second {@code pullEntity(this.hookedIn)} call exists in
+ * {@code handleEntityEvent}, client-side only — irrelevant here since this injector is scoped to
+ * {@code retrieve}.)
+ *
+ * <p><b>The third injector is the Ice Fishing seam</b> (legacy's {@code IN_GROUND} state). Modern
+ * vanilla has no such bobber state — it was a CraftBukkit synthesis fired when a player reeled a
+ * bobber resting on solid ground — so this taps the {@code HEAD} of the same {@code retrieve} reel
+ * method and lets the listener reconstruct the precondition (no hooked entity, and the hook is not
+ * in water). A plain non-cancelling inject: the reel proceeds and discards the hook as normal; the
+ * only side effect is melting the ice sheet the player is looking at into a fishing hole. See
+ * {@link FishingListener#tryIceFishing}.
+ *
+ * <p><b>The fourth injector is the Treasure Hunter vanilla-XP-boost seam</b> (legacy's
+ * {@code event.setExpToDrop(...)} on {@code PlayerFishEvent}). Vanilla builds the orb inline in
+ * {@code retrieve}'s loot loop as
+ * {@code new ExperienceOrb(player.level(), player.getX(), player.getY() + 0.5, player.getZ() + 0.5,
+ * this.random.nextInt(6) + 1)}, so the amount is the 5th constructor argument (index 4 of
+ * {@code (Level, D, D, D, I)}) — modifying it is exactly equivalent to overwriting Bukkit's
+ * {@code expToDrop} before the orb is spawned.
+ *
+ * <p>Bytecode-verified: that constructor is invoked exactly once in {@code retrieve}, hence
+ * {@code allow = 1} on the last injector — an unconstrained injector here would silently bind to any
+ * future orb spawn added to the method.
+ *
+ * <p>The overfishing punishment empties the loot collection, so this loop body never runs for a
+ * confiscated catch and the orb is never spawned, as intended.
+ */
+@Mixin(FishingHook.class)
+public abstract class FishingHookRetrieveMixin {
+
+    @ModifyArg(
+            method = "retrieve", allow = 2,
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/advancements/critereon/FishingRodHookedTrigger;trigger("
+                            + "Lnet/minecraft/server/level/ServerPlayer;"
+                            + "Lnet/minecraft/world/item/ItemStack;"
+                            + "Lnet/minecraft/world/entity/projectile/FishingHook;"
+                            + "Ljava/util/Collection;)V"),
+            index = 3)
+    private Collection<ItemStack> mcmmo$onFishCaught(Collection<ItemStack> caught) {
+        FishingListener.onFishCaught((FishingHook) (Object) this, caught);
+        return caught;
+    }
+
+    @Inject(
+            method = "retrieve",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/world/entity/projectile/FishingHook;pullEntity("
+                            + "Lnet/minecraft/world/entity/Entity;)V"),
+            require = 1,
+            allow = 1)
+    private void mcmmo$onEntityHooked(ItemStack usedItem, CallbackInfoReturnable<Integer> cir) {
+        FishingListener.onEntityHooked((FishingHook) (Object) this);
+    }
+
+    @Inject(method = "retrieve", allow = 1, at = @At("HEAD"))
+    private void mcmmo$tryIceFishing(ItemStack usedItem, CallbackInfoReturnable<Integer> cir) {
+        FishingListener.tryIceFishing((FishingHook) (Object) this);
+    }
+
+    @ModifyArg(
+            method = "retrieve",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/world/entity/ExperienceOrb;<init>("
+                            + "Lnet/minecraft/world/level/Level;DDDI)V"),
+            index = 4,
+            require = 1,
+            allow = 1)
+    private int mcmmo$boostVanillaFishingXp(int experience) {
+        return FishingListener.boostVanillaXp((FishingHook) (Object) this, experience);
+    }
+}

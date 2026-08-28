@@ -6,6 +6,8 @@
   "mixins": [
     "BlockPlaceMixin",
     "ExplosionDropsMixin",
+    "FishingHookRetrieveMixin",
+    "FishingHookWaitTimeMixin",
     "HoeTillingActionsAccessor",
     "LivingEntityDamageMixin",
     "LivingEntityDropFromLootTableAccessor",
