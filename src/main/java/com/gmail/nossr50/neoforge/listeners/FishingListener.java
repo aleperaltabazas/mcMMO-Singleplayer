@@ -2,6 +2,7 @@ package com.gmail.nossr50.neoforge.listeners;
 
 import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
+import com.gmail.nossr50.datatypes.skills.SubSkillType;
 import com.gmail.nossr50.datatypes.treasure.FishingTreasure;
 import com.gmail.nossr50.datatypes.treasure.FishingTreasureBook;
 import com.gmail.nossr50.datatypes.treasure.ShakeTreasure;
@@ -10,8 +11,10 @@ import com.gmail.nossr50.platform.CombatUtils;
 import com.gmail.nossr50.platform.ItemSpecBuilder;
 import com.gmail.nossr50.platform.PlatformItem;
 import com.gmail.nossr50.skills.fishing.FishingManager;
+import com.gmail.nossr50.skills.fishing.FishingManager.MasterAnglerWaitTimes;
 import com.gmail.nossr50.util.player.NotificationManager;
 import com.gmail.nossr50.util.player.UserManager;
+import com.gmail.nossr50.util.skills.RankUtils;
 import com.gmail.nossr50.util.text.ConfigStringUtils;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -29,6 +32,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.animal.Sheep;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.projectile.FishingHook;
+import net.minecraft.world.entity.vehicle.Boat;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.Enchantments;
@@ -81,13 +85,14 @@ import org.jetbrains.annotations.VisibleForTesting;
  * reeling in a hook stuck on an ice sheet over water melts a 3&times;3 hole — see
  * {@link #tryIceFishing}'s javadoc, including its documented "no auto-recast" deviation.
  *
- * <p><b>Master Angler, Magic Hunter, and enchanted-book treasures are deferred to later tasks</b> —
- * this task wires the mixin seam that calls {@link #resolveWaitCountdown} and the
- * {@code maybeCatchTreasure} control flow that reaches the enchant hooks, but their bodies are still
- * stubs: {@link #resolveWaitCountdown} always falls through to an unmodified vanilla draw (Task C);
- * {@link #applyBookEnchantment} and {@link #maybeApplyMagicHunter} always return {@code false} — no
- * enchantment applied (Task D). A no-op/false stub means the corresponding perk is simply inert, not
- * broken, until its task lands.
+ * <p><b>Master Angler is wired</b> ({@link #resolveWaitCountdown} + {@link #masterAnglerWaitTimes}):
+ * see {@link #resolveWaitCountdown}'s javadoc.
+ *
+ * <p><b>Magic Hunter and enchanted-book treasures are deferred to a later task</b> — this task wires
+ * the {@code maybeCatchTreasure} control flow that reaches the enchant hooks, but their bodies are
+ * still stubs: {@link #applyBookEnchantment} and {@link #maybeApplyMagicHunter} always return
+ * {@code false} — no enchantment applied (Task D). A no-op/false stub means the corresponding perk is
+ * simply inert, not broken, until its task lands.
  */
 public final class FishingListener {
 
@@ -515,16 +520,16 @@ public final class FishingListener {
     }
 
     /**
-     * <b>Stub — Task C.</b> Draw the hook's next wait countdown. Until Task C lands this always falls
-     * through to an unmodified vanilla draw — matching the Fabric original's own documented "any gate
-     * miss falls through to an unmodified vanilla draw" behavior — so Master Angler is inert but
-     * harmless: a non-mcMMO player, an unqualified one, or a hook whose owner has left, all fish
-     * exactly as they would without the mod. Called from
+     * Draw the hook's next wait countdown, applying Master Angler when the owner qualifies. Ports
+     * legacy {@code processMasterAngler}; called from
      * {@link com.gmail.nossr50.neoforge.mixin.FishingHookWaitTimeMixin} in place of vanilla's own
      * {@code Mth.nextInt(random, 100, 600)}.
      *
+     * <p>Any gate miss falls through to an unmodified vanilla draw, so a non-mcMMO player, an
+     * unqualified one, or a hook whose owner has left all fish exactly as they would without the mod.
+     *
      * @param hook                the hook drawing a new wait (source of the owner)
-     * @param random              the hook's own RNG — used for the vanilla draw
+     * @param random              the hook's own RNG — used for both the vanilla and the reduced draw
      * @param vanillaMinWaitTicks vanilla's minimum wait bound
      * @param vanillaMaxWaitTicks vanilla's maximum wait bound
      * @param lureReductionTicks  the hook's Lure reduction, which vanilla subtracts after this call
@@ -532,7 +537,52 @@ public final class FishingListener {
      */
     public static int resolveWaitCountdown(FishingHook hook, RandomSource random,
             int vanillaMinWaitTicks, int vanillaMaxWaitTicks, int lureReductionTicks) {
-        return Mth.nextInt(random, vanillaMinWaitTicks, vanillaMaxWaitTicks);
+        final MasterAnglerWaitTimes times = masterAnglerWaitTimes(hook, vanillaMinWaitTicks,
+                vanillaMaxWaitTicks, lureReductionTicks);
+        if (times == null) {
+            return Mth.nextInt(random, vanillaMinWaitTicks, vanillaMaxWaitTicks);
+        }
+
+        final int drawn = Mth.nextInt(random, times.minWaitTicks(), times.maxWaitTicks());
+        // Legacy's fishHook.setApplyLure(false): the Lure reduction has already been folded into the
+        // max-wait reduction, so cancel the subtraction vanilla performs immediately after this call
+        // rather than letting it apply twice.
+        return times.disableLure() ? drawn + lureReductionTicks : drawn;
+    }
+
+    /**
+     * The Master Angler gates from the legacy {@code PlayerFishEvent} {@code FISHING} arm, plus the
+     * owner lookup. Returns {@code null} when Master Angler must not apply.
+     *
+     * <p>Legacy required a fishing rod in the main hand and skipped entirely when one was also in the
+     * off hand ("prevent any potential odd behavior"); both are kept. Legacy read them at cast time and
+     * we read them at wait-draw time — see {@code FishingHookWaitTimeMixin} for that deviation. Legacy's
+     * trailing {@code setFishingTarget()} call is dropped: it discards the value it computes
+     * ({@code getTargetBlock(...)} with no assignment), so it is dead code upstream.
+     */
+    @VisibleForTesting
+    static MasterAnglerWaitTimes masterAnglerWaitTimes(FishingHook hook, int minWaitTicks,
+            int maxWaitTicks, int lureReductionTicks) {
+        if (!(hook.getPlayerOwner() instanceof ServerPlayer serverPlayer)) {
+            return null; // client-side / null owner.
+        }
+        if (!serverPlayer.getMainHandItem().is(Items.FISHING_ROD)
+                || serverPlayer.getOffhandItem().is(Items.FISHING_ROD)) {
+            return null;
+        }
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(serverPlayer.getUUID());
+        if (mmoPlayer == null) {
+            return null; // data not loaded (e.g. mid-join).
+        }
+        final FishingManager fishingManager = mmoPlayer.getFishingManager();
+        if (fishingManager == null || !fishingManager.canMasterAngler()) {
+            return null;
+        }
+
+        final boolean boatBonus = serverPlayer.getVehicle() instanceof Boat;
+        return fishingManager.resolveMasterAnglerWaitTimesFromLureTicks(minWaitTicks, maxWaitTicks,
+                RankUtils.getRank(mmoPlayer, SubSkillType.FISHING_MASTER_ANGLER), boatBonus,
+                lureReductionTicks);
     }
 
     /**
