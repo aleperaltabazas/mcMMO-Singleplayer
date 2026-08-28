@@ -39,10 +39,14 @@ class LivingEntityDropFromLootTableAccessorTest {
     }
 
     @Test
-    void theMixinInterfaceIsLoadable() {
-        // Verify that the mixin interface can be loaded, proving it was registered and
-        // included in the mixin processing pipeline.
-        assertNotNull(LivingEntityDropFromLootTableAccessor.class,
-                "Mixin interface must be loadable");
+    void theInvokerMethodIsDeclaradWithCorrectSignature() throws NoSuchMethodException {
+        // Verify that the @Invoker abstract method was declared with the correct signature.
+        // The @Invoker annotation creates an abstract method with the same signature as the
+        // target method. Here we verify the interface declares the invoker method that will
+        // be woven into LivingEntity at runtime.
+        final Method invokerMethod = LivingEntityDropFromLootTableAccessor.class.getDeclaredMethod(
+                "mcmmo$invokeDropFromLootTable",
+                DamageSource.class, boolean.class);
+        assertNotNull(invokerMethod, "Invoker method must exist with correct signature (source, causedByPlayer)");
     }
 }
