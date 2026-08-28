@@ -4,6 +4,7 @@ import com.gmail.nossr50.config.experience.ExperienceConfig;
 import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
+import com.gmail.nossr50.datatypes.skills.SubSkillType;
 import com.gmail.nossr50.datatypes.skills.subskills.movement.DodgeResult;
 import com.gmail.nossr50.datatypes.skills.subskills.movement.RollResult;
 import com.gmail.nossr50.locale.LocaleLoader;
@@ -15,14 +16,19 @@ import com.gmail.nossr50.platform.ParticleEffectUtils;
 import com.gmail.nossr50.platform.PlatformLivingEntity;
 import com.gmail.nossr50.platform.PlatformSoundCategory;
 import com.gmail.nossr50.platform.text.TextUtils;
+import com.gmail.nossr50.skills.LimitBreak;
 import com.gmail.nossr50.skills.MeleeDamageBonus;
 import com.gmail.nossr50.skills.MeleeDamageBonus.MeleeWeapon;
+import com.gmail.nossr50.skills.archery.Archery;
+import com.gmail.nossr50.skills.archery.ArcheryManager;
 import com.gmail.nossr50.skills.axes.AxesManager;
+import com.gmail.nossr50.skills.crossbows.CrossbowsManager;
 import com.gmail.nossr50.skills.maces.MacesManager;
 import com.gmail.nossr50.skills.movement.MovementManager;
 import com.gmail.nossr50.skills.spears.SpearsManager;
 import com.gmail.nossr50.skills.swords.SwordsManager;
 import com.gmail.nossr50.skills.taming.TamingManager;
+import com.gmail.nossr50.skills.tridents.TridentsManager;
 import com.gmail.nossr50.skills.unarmed.UnarmedManager;
 import com.gmail.nossr50.skills.unarmored.UnarmoredManager;
 import com.gmail.nossr50.util.player.NotificationManager;
@@ -1151,13 +1157,176 @@ public final class EntityDamageListener {
     }
 
     /**
-     * Stub — filled in by Task B/C/D of docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md.
-     * Archery Skill Shot, Crossbows Powered Shot and Trident Impale all live here in the Fabric
-     * original.
+     * K1 attacker branch, projectile half: routes a player-fired arrow, crossbow bolt or thrown
+     * trident to the skill it trains (Archery Skill Shot / Crossbows Powered Shot / Trident Impale).
+     * Mutually exclusive with the melee and wolf arms above — a hit's direct source is exactly one
+     * entity type — and mutually exclusive with itself across the three sub-arms it dispatches to.
+     *
+     * <p>Reads the <em>direct</em> damager as {@link AbstractArrow} — narrower than
+     * {@link #sicPetsOnRangedHit}'s {@link Projectile} check on purpose: this arm's maths (Archery's
+     * distance/bow-force XP multiplier, Crossbows' weapon-item read) only makes sense for something
+     * that is an arrow/bolt/trident, not a snowball or a firework. Do not widen this back to
+     * {@code Projectile} to "match" the sic-pets call — see {@link #sicPetsOnRangedHit}'s own javadoc
+     * for why the two arms are deliberately typed differently.
      */
     private static float applyProjectileAttackBonus(LivingEntity target, DamageSource source,
             float amount) {
-        return amount; // no-op until Task C lands
+        if (!(source.getDirectEntity() instanceof AbstractArrow projectile)) {
+            return amount; // not a projectile hit.
+        }
+        if (!(projectile.getOwner() instanceof ServerPlayer shooter)) {
+            return amount; // wild/dispenser projectile, or not fired by this player.
+        }
+        if (isTargetDummy(target)) {
+            return amount;
+        }
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(shooter.getUUID());
+        if (mmoPlayer == null) {
+            return amount; // data not loaded (e.g. mid-join).
+        }
+
+        if (projectile instanceof ThrownTrident) {
+            return applyTridentImpale(mmoPlayer, target, amount);
+        }
+
+        if (isCrossbowShot(projectile)) {
+            return applyPoweredShot(mmoPlayer, target, projectile, amount);
+        }
+        return applyArcheryBonus(mmoPlayer, target, projectile, amount);
+    }
+
+    /**
+     * Whether this projectile was loosed from a crossbow rather than a bow (Crossbows vs Archery).
+     * {@code AbstractArrow#isShotFromCrossbow()} does not exist on this branch (verified via javap:
+     * no such method on the compiled 1.21.1 {@code AbstractArrow}), so the firing weapon is read from
+     * the arrow's own record instead, via {@link AbstractArrow#getWeaponItem()}.
+     *
+     * <p>The null guard is load-bearing, not defensive noise: {@code getWeaponItem()} returns a
+     * genuinely nullable field ({@code firedFromWeapon}, verified via javap against the compiled
+     * class) — an arrow that never went through the weapon-item write (summoned directly, restored
+     * from a world saved before the field existed, or spawned and adopted by another mod) would
+     * otherwise NPE here, inside the vanilla damage pipeline. A missing weapon reads as a bow shot,
+     * which is the correct fallback: "not a crossbow → Archery".
+     */
+    private static boolean isCrossbowShot(AbstractArrow projectile) {
+        final ItemStack weapon = projectile.getWeaponItem();
+        return weapon != null && weapon.is(Items.CROSSBOW);
+    }
+
+    /**
+     * Archery: a bow-fired arrow's <b>Skill Shot</b> damage bonus and <b>Arrow Retrieval</b> credit
+     * (legacy {@code processArcheryCombat}).
+     *
+     * <p>Skill Shot, Arrow Retrieval and the XP award are independent, as they are upstream — each
+     * sits in its own {@code if}, so a player whose Skill Shot is locked (or disabled) still collects
+     * their arrows and still earns Archery XP. Retrieval only credits the target here; the arrows
+     * themselves drop when it dies (Arrow Retrieval's drop-on-death half lives in a not-yet-ported
+     * {@code ProjectileListener}, out of this task's scope per the design spec).
+     */
+    private static float applyArcheryBonus(McMMOPlayer mmoPlayer, LivingEntity target,
+            AbstractArrow projectile, float amount) {
+        if (!CombatUtils.canCombatSkillsTrigger(PrimarySkillType.ARCHERY, target)) {
+            return amount;
+        }
+        final ArcheryManager archery = mmoPlayer.getArcheryManager();
+        if (archery == null) {
+            return amount;
+        }
+
+        if (archery.canRetrieveArrows()) {
+            archery.retrieveArrows(target.getUUID(), projectile.getUUID());
+        }
+
+        float boostedDamage = amount;
+        if (archery.canSkillShot()) {
+            boostedDamage = (float) archery.skillShot(amount); // not additive — Skill Shot replaces it.
+        }
+        // Limit Break is added AFTER Skill Shot, because Skill Shot replaces the damage rather than
+        // adding to it — ahead of it the bonus would simply be discarded. Legacy's ordering, and
+        // unlike the melee arms this one is NOT scaled by attack strength: an arrow already in
+        // flight has no swing left to charge. Same asymmetry the ranged Impale arm below preserves.
+        boostedDamage += LimitBreak.bonusDamage(mmoPlayer,
+                SubSkillType.ARCHERY_ARCHERY_LIMIT_BREAK);
+        // Legacy pays `forceMultiplier * distanceMultiplier`. Bow force is stamped at launch by the
+        // bow-shoot hook (Archery#markBowForce); an arrow that skipped that hook (or whose mark aged
+        // out) reads back the flat 1.0 legacy defaulted it to, so the product degrades to
+        // distance-only rather than to zero.
+        final double xpMultiplier = Archery.bowForceMultiplier(projectile.getUUID())
+                * distanceXpMultiplier(target, projectile);
+        CombatUtils.processCombatXP(mmoPlayer, target, PrimarySkillType.ARCHERY, boostedDamage,
+                xpMultiplier);
+        return boostedDamage;
+    }
+
+    /**
+     * The fired-from-distance XP multiplier for a projectile hit — legacy's static
+     * {@code ArcheryManager#distanceXpBonusMultiplier(target, arrow)}, which both the Archery and the
+     * Crossbows arm call. This owns only the MC-typed reads (the struck entity's world and position);
+     * the measurement itself is MC-free on {@link Archery}.
+     */
+    private static double distanceXpMultiplier(LivingEntity target, AbstractArrow projectile) {
+        return Archery.distanceXpBonusMultiplier(projectile.getUUID(),
+                target.level().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ());
+    }
+
+    /**
+     * Crossbows Powered Shot: a crossbow bolt's damage bonus (legacy {@code processCrossbowsCombat}),
+     * plus the bolt's distance-scaled per-hit Crossbows XP.
+     *
+     * <p>The distance multiplier is the very same Archery static legacy calls from here. Legacy also
+     * hardcodes {@code forceMultiplier = 1.0} on this arm — a crossbow is loosed at full power, so
+     * there is no draw to scale by — which is why this arm is complete while Archery's still owes its
+     * force half.
+     */
+    private static float applyPoweredShot(McMMOPlayer mmoPlayer, LivingEntity target,
+            AbstractArrow projectile, float amount) {
+        if (!CombatUtils.canCombatSkillsTrigger(PrimarySkillType.CROSSBOWS, target)) {
+            return amount;
+        }
+        final CrossbowsManager crossbows = mmoPlayer.getCrossbowsManager();
+        if (crossbows == null) {
+            return amount;
+        }
+
+        float boostedDamage = amount;
+        if (crossbows.canPoweredShot()) {
+            boostedDamage = (float) crossbows.poweredShot(amount); // not additive — it replaces it.
+        }
+        // After Powered Shot for the same reason as Archery's, and unscaled for the same reason.
+        boostedDamage += LimitBreak.bonusDamage(mmoPlayer,
+                SubSkillType.CROSSBOWS_CROSSBOWS_LIMIT_BREAK);
+        CombatUtils.processCombatXP(mmoPlayer, target, PrimarySkillType.CROSSBOWS, boostedDamage,
+                distanceXpMultiplier(target, projectile));
+        return boostedDamage;
+    }
+
+    /**
+     * Tridents Impale (ranged): a thrown trident's flat damage bonus (legacy
+     * {@code processTridentCombatRanged}) plus its per-hit Tridents XP. Unlike the melee trident path,
+     * the ranged bonus is <em>not</em> scaled by attack strength — a thrown trident has no swing to
+     * charge.
+     */
+    private static float applyTridentImpale(McMMOPlayer mmoPlayer, LivingEntity target, float amount) {
+        if (!CombatUtils.canCombatSkillsTrigger(PrimarySkillType.TRIDENTS, target)) {
+            return amount;
+        }
+        final TridentsManager tridents = mmoPlayer.getTridentsManager();
+        if (tridents == null) {
+            return amount;
+        }
+
+        float boostedDamage = amount;
+        if (tridents.canImpale()) {
+            boostedDamage = amount + (float) tridents.impaleDamageBonus();
+        }
+        // Unscaled here but attack-strength-scaled on the melee path — that split is legacy's own
+        // (processTridentCombatRanged vs processTridentCombatMelee) and is the same reason Impale
+        // itself is scaled in MeleeDamageBonus and flat here.
+        boostedDamage += LimitBreak.bonusDamage(mmoPlayer,
+                SubSkillType.TRIDENTS_TRIDENTS_LIMIT_BREAK);
+        CombatUtils.processCombatXP(mmoPlayer, target, PrimarySkillType.TRIDENTS, boostedDamage);
+        return boostedDamage;
     }
 
     // --- Parkour: Smash ----------------------------------------------------------------------------
