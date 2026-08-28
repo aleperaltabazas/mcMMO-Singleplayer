@@ -1197,20 +1197,16 @@ public final class EntityDamageListener {
 
     /**
      * Whether this projectile was loosed from a crossbow rather than a bow (Crossbows vs Archery).
-     * {@code AbstractArrow#isShotFromCrossbow()} does not exist on this branch (verified via javap:
-     * no such method on the compiled 1.21.1 {@code AbstractArrow}), so the firing weapon is read from
-     * the arrow's own record instead, via {@link AbstractArrow#getWeaponItem()}.
-     *
-     * <p>The null guard is load-bearing, not defensive noise: {@code getWeaponItem()} returns a
-     * genuinely nullable field ({@code firedFromWeapon}, verified via javap against the compiled
-     * class) — an arrow that never went through the weapon-item write (summoned directly, restored
-     * from a world saved before the field existed, or spawned and adopted by another mod) would
-     * otherwise NPE here, inside the vanilla damage pipeline. A missing weapon reads as a bow shot,
-     * which is the correct fallback: "not a crossbow → Archery".
+     * The yarn-named {@code isShotFromCrossbow()} the Fabric original called has no vanilla
+     * equivalent it could lean on, so it hand-rolled the check off the weapon-item record. This
+     * branch's official-mappings {@link AbstractArrow} ships the same logic natively as
+     * {@link AbstractArrow#shotFromCrossbow()} — javap-verified (bytecode: {@code firedFromWeapon !=
+     * null && firedFromWeapon.is(Items.CROSSBOW)}, byte-for-byte the same null-guarded check a
+     * hand-written version would need) — so this delegates to it directly instead of
+     * reimplementing it via {@code getWeaponItem()} + an {@code Items.CROSSBOW} check.
      */
     private static boolean isCrossbowShot(AbstractArrow projectile) {
-        final ItemStack weapon = projectile.getWeaponItem();
-        return weapon != null && weapon.is(Items.CROSSBOW);
+        return projectile.shotFromCrossbow();
     }
 
     /**
