@@ -164,8 +164,14 @@ class FishingListenerMasterAnglerTest {
         assertTrue(boatTimes.maxWaitTicks() - boatTimes.minWaitTicks()
                 < landTimes.maxWaitTicks() - landTimes.minWaitTicks());
         // Confirms the vehicle check actually drove the boatBonus argument, not just the stub setup.
-        verify(boatManager).resolveMasterAnglerWaitTimesFromLureTicks(100, 600, 0, true, 0);
-        verify(landManager).resolveMasterAnglerWaitTimesFromLureTicks(100, 600, 0, false, 0);
+        // The rank argument uses anyInt() rather than a literal 0: RankUtils.getRank's resolved value
+        // depends on a JVM-wide static cache this test does not control, so pinning it to a literal
+        // would be a false-negative risk if another test in the same run left a different config
+        // resolved into that cache.
+        verify(boatManager).resolveMasterAnglerWaitTimesFromLureTicks(eq(100), eq(600), anyInt(),
+                eq(true), eq(0));
+        verify(landManager).resolveMasterAnglerWaitTimesFromLureTicks(eq(100), eq(600), anyInt(),
+                eq(false), eq(0));
     }
 
     // --- arithmetic: resolveWaitCountdown ---

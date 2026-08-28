@@ -270,8 +270,8 @@ public final class FishingListener {
      * with {@code Extra_Fish} off the treasure replaces the fish, with it on the fish is kept too.
      *
      * <p>The enchant branch (a book takes its own mechanism, everything else goes through Magic Hunter)
-     * is real control flow in this task; only the two methods it calls are stubs until Task D lands —
-     * see the class javadoc.
+     * is real control flow, dispatching to {@link #applyBookEnchantment} and
+     * {@link #maybeApplyMagicHunter} — see the class javadoc.
      */
     private static void maybeCatchTreasure(ServerPlayer serverPlayer, McMMOPlayer mmoPlayer,
             FishingManager fishingManager, Collection<ItemStack> caught) {
@@ -316,6 +316,23 @@ public final class FishingListener {
      * warn about any whitelist entry that names none of them, build the book's legal
      * (enchantment, level) pool via {@link FishingTreasureBook#resolveAllowedEnchantmentIds}, and hand
      * it to {@link FishingManager#pickBookEnchantment} for the single draw.
+     *
+     * <p><b>Why {@link EnchantmentHelper#updateEnchantments} needs no book/tool branch of its own.</b>
+     * Its component lookup, {@code EnchantmentHelper.getComponentType(stack)}, is itself
+     * {@code stack.is(Items.ENCHANTED_BOOK) ? DataComponents.STORED_ENCHANTMENTS
+     * : DataComponents.ENCHANTMENTS} — so the identical {@code updateEnchantments} call used elsewhere
+     * in this class for ordinary tools/armor also routes a book to its stored-enchantments component
+     * with no special-casing here. That is legacy's {@code EnchantmentStorageMeta#addStoredEnchant}.
+     *
+     * <p><b>Known simplification:</b> the pool above is keyed by registry <i>path</i>, with the
+     * namespace dropped, because that is what {@code fishing_treasures.yml}'s whitelist/blacklist name.
+     * If a mod ever registered an enchantment whose path collides with a vanilla one
+     * ({@code somemod:fortune}), only one of the two would reach the pool — unreachable in this
+     * singleplayer port's vanilla registry and not built for.
+     *
+     * <p>Legacy's {@code allowUnsafeEnchantments} flag is inert on this path and is not read: the
+     * level always comes from the {@code 1..getMaxLevel()} expansion above, so there is no level
+     * restriction for the flag to waive.
      *
      * @return whether an enchantment was applied (the caller sends the notification if so)
      */
@@ -442,6 +459,12 @@ public final class FishingListener {
         // Legacy shuffles so the halving walk doesn't permanently favour whoever is first in the file.
         Collections.shuffle(candidates, rng);
 
+        // NOTE: getTagEnchantments() reads DataComponents.ENCHANTMENTS directly -- it is not
+        // component-type-aware like EnchantmentHelper.getComponentType/updateEnchantments, so it would
+        // read the wrong component (missing STORED_ENCHANTMENTS) for an enchanted-book treasure.
+        // Currently unreachable: ItemSpecBuilder never sets enchantments on a freshly-built treasure,
+        // so alreadyOnItem is always empty here in practice today. A future change that lets Magic
+        // Hunter target an enchanted-book treasure would need to fix this read path first.
         final Set<Holder<Enchantment>> alreadyOnItem = treasureStack.getTagEnchantments().keySet();
         final List<EnchantmentTreasure> chosen = fishingManager.selectMagicHunterEnchants(candidates,
                 (selectedSoFar, candidate) -> conflictsWithAny(alreadyOnItem, selectedSoFar, resolved,
@@ -617,6 +640,12 @@ public final class FishingListener {
      * player's crosshair, not the bobber — so this raycasts (now {@link net.minecraft.world.entity.Entity#pick})
      * the player likewise.
      *
+     * <p><b>Disclosed widening.</b> This reconstructed precondition is slightly broader than legacy's
+     * exact {@code IN_GROUND} state: it also passes for a hook still in flight (mid-cast), not only one
+     * resting on solid ground, since neither "no hooked entity" nor "not in water" rules that out. The
+     * practical effect is small because the raycast above originates from the player's crosshair rather
+     * than the bobber's position, so a mid-flight hook does not itself change what block gets melted.
+     *
      * <p><b>Body-of-water check.</b> Legacy required the block 3 below to be water <em>or</em> an icy
      * biome. There is no stable vanilla "icy biome" tag, and a genuine frozen lake/ocean has water
      * within a few blocks of its surface regardless of biome, so this scans the 1–4 blocks under the
@@ -772,6 +801,7 @@ public final class FishingListener {
      * legacy's exact lookup. Enchantment level resolves off the stack's component with no world
      * context needed.
      */
+    @VisibleForTesting
     static int luckOfTheSeaLevel(ServerPlayer player) {
         final ItemStack main = player.getMainHandItem();
         final ItemStack rod = main.is(Items.FISHING_ROD) ? main : player.getOffhandItem();
