@@ -15,6 +15,7 @@ import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.ParticleEffectUtils;
 import com.gmail.nossr50.platform.PlatformLivingEntity;
 import com.gmail.nossr50.platform.PlatformSoundCategory;
+import com.gmail.nossr50.platform.MobTiers;
 import com.gmail.nossr50.platform.text.TextUtils;
 import com.gmail.nossr50.skills.LimitBreak;
 import com.gmail.nossr50.skills.MeleeDamageBonus;
@@ -23,9 +24,11 @@ import com.gmail.nossr50.skills.archery.Archery;
 import com.gmail.nossr50.skills.archery.ArcheryManager;
 import com.gmail.nossr50.skills.axes.AxesManager;
 import com.gmail.nossr50.skills.crossbows.CrossbowsManager;
+import com.gmail.nossr50.skills.hunter.HunterManager;
 import com.gmail.nossr50.skills.maces.MacesManager;
 import com.gmail.nossr50.skills.movement.MovementManager;
 import com.gmail.nossr50.skills.spears.SpearsManager;
+import com.gmail.nossr50.skills.stealth.StealthManager;
 import com.gmail.nossr50.skills.swords.SwordsManager;
 import com.gmail.nossr50.skills.taming.TamingManager;
 import com.gmail.nossr50.skills.tridents.TridentsManager;
@@ -277,12 +280,12 @@ public final class EntityDamageListener {
      * tameable creature while holding a bone reads it instead of hitting it, and the blow is
      * cancelled.
      *
-     * <p><b>PORT (Task A):</b> Hunter's <b>Quarry Sense</b> half of this dispatcher is Task D
-     * territory — it needs {@code HunterListener.masteryKeyOf}, from a Fabric listener file not yet
-     * ported to this branch. Rather than reach into a class that does not exist here, {@code
-     * quarrySense} below is hardcoded {@code false}; Task D restores the real gate ({@code
-     * attacker.isSneaking() && !(entity instanceof ArmorStand) && hunter.canQuarrySense()}) and the
-     * combined message.
+     * <p>Hunter's <b>Quarry Sense</b> half was a Task A stub (hardcoded {@code false}, since it needs
+     * {@code HunterListener.masteryKeyOf}, from a Fabric listener file not ported until this task);
+     * Task D restores the real gate ({@code attacker.isShiftKeyDown() && !(entity instanceof
+     * ArmorStand) && hunter.canQuarrySense()}) and the combined message. Note this gate is
+     * deliberately different from Beast Lore's: Beast Lore has no sneak requirement at all, while
+     * Quarry Sense requires it — carried over unchanged from the Fabric original.
      *
      * @return {@code true} if the creature was inspected (the caller should cancel the hit)
      */
@@ -305,8 +308,10 @@ public final class EntityDamageListener {
         final boolean beastLore =
                 entity instanceof OwnableEntity && taming != null && taming.canUseBeastLore();
 
-        // Task D: Hunter's Quarry Sense half — see the class javadoc above.
-        final boolean quarrySense = false;
+        final HunterManager hunter = mmoPlayer.getHunterManager();
+        final boolean quarrySense = attacker.isShiftKeyDown()
+                && !(entity instanceof ArmorStand)
+                && hunter != null && hunter.canQuarrySense();
 
         if (!beastLore && !quarrySense) {
             return false;
@@ -316,8 +321,61 @@ public final class EntityDamageListener {
         if (beastLore) {
             message.append(beastLore(entity));
         }
+        if (quarrySense) {
+            if (!message.isEmpty()) {
+                message.append('\n');
+            }
+            message.append(quarrySenseLore(hunter, entity.getType().getDescription().getString(),
+                    HunterListener.masteryKeyOf(entity), MobTiers.tierOf(entity)));
+        }
         attacker.sendSystemMessage(TextUtils.toText(message.toString()));
         return true;
+    }
+
+    /**
+     * Builds Hunter <b>Quarry Sense</b>'s readout: what this player knows about this creature.
+     *
+     * <p>Ported verbatim (MC-free composition, four plain values) from the Fabric original's
+     * {@code quarrySenseLore} — see that method's javadoc for why it takes plain values instead of the
+     * entity. The mastery key is always {@link HunterListener#masteryKeyOf} (never a locally re-derived
+     * id — see that method's own javadoc for why), and the tier is always {@link MobTiers#tierOf}
+     * (never a live health read).
+     *
+     * @param hunter       the viewing player's Hunter manager
+     * @param creatureName the creature's display name, e.g. {@code Zombie}
+     * @param mobId        the creature's full registry id, the key its counter is filed under
+     * @param mobTier      the creature's Hunter tier, 1-4
+     */
+    static String quarrySenseLore(HunterManager hunter, String creatureName, String mobId,
+            int mobTier) {
+        final int kills = hunter.getKills(mobId);
+        final int tier = hunter.masteryTier(kills);
+
+        final StringBuilder lore = new StringBuilder()
+                .append(LocaleLoader.getString("Hunter.SubSkill.QuarrySense.Lore", creatureName))
+                .append('\n')
+                .append(LocaleLoader.getString("Hunter.SubSkill.QuarrySense.Lore.Slain", kills))
+                .append(' ');
+
+        lore.append(tier <= 0
+                ? LocaleLoader.getString("Hunter.SubSkill.QuarrySense.Lore.Unmastered")
+                : LocaleLoader.getString("Hunter.SubSkill.QuarrySense.Lore.Mastery", tier,
+                        String.valueOf(hunter.masteryDamageBonus(kills))));
+
+        final int toNext = hunter.killsToNextMasteryTier(kills);
+        lore.append('\n').append(toNext <= 0
+                ? LocaleLoader.getString("Hunter.SubSkill.QuarrySense.Lore.Capped")
+                : LocaleLoader.getString("Hunter.SubSkill.QuarrySense.Lore.Next", toNext, tier + 1));
+
+        // The tier line carries the trophy state because on its own the tier is trivia: what a player
+        // wants to know standing in front of a creature is whether their rank reaches it.
+        lore.append('\n').append(LocaleLoader.getString("Hunter.SubSkill.QuarrySense.Lore.Tier",
+                mobTier,
+                LocaleLoader.getString(hunter.canTrophyHunt(mobTier)
+                        ? "Hunter.SubSkill.QuarrySense.Lore.Trophy.Unlocked"
+                        : "Hunter.SubSkill.QuarrySense.Lore.Trophy.Locked")));
+
+        return lore.toString();
     }
 
     /**
@@ -690,12 +748,86 @@ public final class EntityDamageListener {
     // --- Taming defender half: wolf-damage dispatch (Task D stub) ---------------------------------
 
     /**
-     * Stub — filled in by Task D of docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md.
-     * Thick Fur / Shock Proof / Holy Hound / Environmentally Aware's non-FALL arms all live here in
-     * the Fabric original.
+     * K1 defender branch, Taming half: the player's wolf is taking damage, and Taming may soften,
+     * heal back or shrug it off depending on what hurt it. Ports the {@code Tameable} arm of legacy
+     * {@code EntityListener#onEntityDamage}, including {@code Taming.canPreventDamage}'s
+     * {@code isTamed() && owner instanceof Player && pet instanceof Wolf} gate — {@code getOwner()}
+     * is null unless tamed, so matching {@link Wolf} and a {@link ServerPlayer} owner is that whole
+     * check.
+     *
+     * <p>Legacy switches on Bukkit's {@code DamageCause}, which has no modern counterpart; each arm is
+     * mapped to the vanilla damage types Bukkit derived that cause from (see the helpers above/below).
+     * The arms are mutually exclusive and every one of them {@code return}s, exactly as legacy's
+     * {@code switch} did.
+     *
+     * <p>Environmentally Aware rides both seams: its {@code CONTACT}/{@code FIRE}/{@code HOT_FLOOR}/
+     * {@code LAVA} arm teleports the wolf clear from here (see {@link #isEnvironmentallyAwareCause}),
+     * while its {@code FALL} arm cancels the hit outright and so rides the {@code ALLOW_DAMAGE} veto
+     * (see {@link #onAllowDamage} / {@link #isEnvironmentallyAwareFall}) rather than this reduce-only
+     * seam.
      */
     private static float handleWolfDamage(Wolf wolf, DamageSource source, float amount) {
-        return amount; // no-op until Task D lands
+        if (!(wolf.getOwner() instanceof ServerPlayer owner)) {
+            return amount; // wild wolf (getOwner() is null unless tamed).
+        }
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(owner.getUUID());
+        if (mmoPlayer == null) {
+            return amount;
+        }
+        final TamingManager taming = mmoPlayer.getTamingManager();
+        if (taming == null) {
+            return amount;
+        }
+
+        // ENTITY_ATTACK / PROJECTILE -> Thick Fur halves the hit.
+        if (isEntityAttack(source) || source.is(DamageTypeTags.IS_PROJECTILE)) {
+            if (taming.canUseThickFur()) {
+                // Legacy additionally cancelled the event when the reduction bottomed out at 0; a
+                // returned 0 is equivalent in effect (no health lost), as with Demolitions Expertise.
+                return (float) Math.max(taming.processThickFur(amount), 0.0D);
+            }
+            return amount;
+        }
+
+        // FIRE_TICK -> Thick Fur snuffs the flames. Note this is vanilla ON_FIRE (*burning*), not the
+        // IS_FIRE tag: that tag also covers IN_FIRE/CAMPFIRE, which are Bukkit's FIRE cause and
+        // belong to the Environmentally Aware arm below, not to this one.
+        if (source.is(DamageTypes.ON_FIRE)) {
+            if (taming.canUseThickFur()) {
+                new PlatformLivingEntity(wolf).extinguish();
+            }
+            return amount;
+        }
+
+        // CONTACT / FIRE / HOT_FLOOR / LAVA -> Environmentally Aware teleports the wolf back to its
+        // owner (out of continued contact). The hit itself still lands — legacy's teleport arm neither
+        // reduces nor cancels the damage; only the FALL arm cancels, and it rides the ALLOW_DAMAGE veto
+        // (see onAllowDamage) since this seam cannot cancel. Note the FIRE half is IN_FIRE/CAMPFIRE,
+        // distinct from the ON_FIRE (FIRE_TICK) burning DoT the Thick Fur arm above handles.
+        if (isEnvironmentallyAwareCause(source)) {
+            if (taming.canUseEnvironmentallyAware()) {
+                taming.processEnvironmentallyAware(new PlatformLivingEntity(wolf), amount);
+            }
+            return amount;
+        }
+
+        // MAGIC / POISON / WITHER -> Holy Hound heals the wolf for what it took.
+        if (isHolyHoundCause(source)) {
+            if (taming.canUseHolyHound()) {
+                taming.processHolyHound(new PlatformLivingEntity(wolf), amount);
+            }
+            return amount;
+        }
+
+        // BLOCK_EXPLOSION / ENTITY_EXPLOSION / LIGHTNING -> Shock Proof divides the hit down.
+        if (source.is(DamageTypeTags.IS_EXPLOSION) || source.is(DamageTypeTags.IS_LIGHTNING)) {
+            if (taming.canUseShockProof()) {
+                return (float) Math.max(taming.processShockProof(amount), 0.0D);
+            }
+            return amount;
+        }
+
+        return amount;
     }
 
     /**
@@ -1064,14 +1196,69 @@ public final class EntityDamageListener {
     }
 
     /**
-     * Stub — filled in by Task B/C/D of docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md.
-     * A tamed wolf's bite carrying its owner's Gore / Sharpened Claws / Fast Food Service (plus
-     * Pummel and wolf-assisted Taming XP) lives here in the Fabric original.
+     * K1 attacker branch, Taming half: a tamed wolf's bite carries its owner's Gore / Sharpened Claws
+     * / Fast Food Service, plus Pummel and wolf-assisted Taming XP. Ports legacy
+     * {@code CombatUtils#processTamingCombat} via the Fabric original's {@code applyWolfAttackBonus}.
+     *
+     * <p>Keys off the <em>direct</em> damager, matching legacy's {@code painSource}: a wolf's own
+     * bite, not (say) an arrow that happens to have a wolf as its owner.
+     *
+     * <p>Fast Food Service and Pummel run before the damage bonuses, matching legacy's ordering:
+     * Pummel flings the target along the wolf's look direction on a successful roll but does not feed
+     * the damage total, so it runs as a side effect rather than contributing to {@code boostedDamage}.
+     *
+     * <p>Closes with legacy's {@code processCombatXP(mmoPlayer, target, TAMING, 3)} — the
+     * wolf-assisted Taming XP the port's old per-kill XP model could not express, since that listener
+     * only fired when the <em>killer</em> was a player, so a wolf's kill paid nothing at all.
      */
     private static float applyWolfAttackBonus(LivingEntity target, DamageSource source,
             float amount) {
-        return amount; // no-op until a later task lands
+        if (!(source.getDirectEntity() instanceof Wolf wolf)) {
+            return amount;
+        }
+        if (!(wolf.getOwner() instanceof ServerPlayer master)) {
+            return amount; // wild wolf, or one whose owner is not this player.
+        }
+        if (!CombatUtils.canCombatSkillsTrigger(PrimarySkillType.TAMING, target)) {
+            return amount;
+        }
+
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(master.getUUID());
+        if (mmoPlayer == null) {
+            return amount; // data not loaded (e.g. mid-join).
+        }
+        final TamingManager taming = mmoPlayer.getTamingManager();
+        if (taming == null) {
+            return amount;
+        }
+
+        final PlatformLivingEntity platformWolf = new PlatformLivingEntity(wolf);
+        if (taming.canUseFastFoodService()) {
+            taming.fastFoodService(platformWolf, amount);
+        }
+
+        // Pummel: called unconditionally, matching legacy's processTamingCombat — the rank gate and
+        // the static chance roll live inside the manager. It flings the target along the wolf's look
+        // direction but never touches the damage total, so it sits between Fast Food Service and the
+        // damage bonuses exactly as legacy sequences it.
+        taming.processPummel(new PlatformLivingEntity(target), platformWolf);
+
+        double boostedDamage = amount;
+        if (taming.canUseSharpenedClaws()) {
+            boostedDamage += taming.sharpenedClaws();
+        }
+        if (taming.canUseGore()) {
+            boostedDamage += taming.gore(amount);
+        }
+
+        // Wolf-assisted Taming XP, at legacy's ×3 multiplier (processTamingCombat's closing line).
+        CombatUtils.processCombatXP(mmoPlayer, target, PrimarySkillType.TAMING, boostedDamage,
+                WOLF_ASSIST_XP_MULTIPLIER);
+        return (float) boostedDamage;
     }
+
+    /** Legacy's {@code processTamingCombat} closing multiplier for wolf-assisted Taming XP. */
+    private static final double WOLF_ASSIST_XP_MULTIPLIER = 3.0;
 
     /**
      * Whether this target is a decoration rather than a fight — an armour stand or a mannequin
@@ -1436,23 +1623,134 @@ public final class EntityDamageListener {
     }
 
     /**
-     * Stub — filled in by Task D of docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md.
-     * A melee hit thrown while crouched, by someone who has not been hit recently (see
-     * {@link #ticksSinceDamageTaken}), lands as a backstab for a multiple of its normal damage in
-     * the Fabric original.
+     * Stealth <b>Assassin</b>: a melee hit thrown while crouched, by someone who has not been hit
+     * recently, is a backstab and lands for a multiple of its normal damage.
+     *
+     * <p>Gated like {@link #applySprintSmash} and for the same reason — the sub-skill is "you struck
+     * from the shadows", not "you struck with a sword" — so it fires with whatever is in hand,
+     * including nothing.
+     *
+     * <p><b>Multiplicative, and applied to the running total</b>, so it scales the weapon skill's
+     * on-hit bonus and Smash along with the base swing. That is deliberate (a backstab multiplies the
+     * whole blow) and it is also the most likely thing in this skill to be over-tuned: it compounds
+     * with vanilla critical hits too.
+     *
+     * <p>The recency half of the gate is what stops it being a free permanent damage buff for anyone
+     * willing to fight crouched: take a single hit and it is off for
+     * {@code NoDamageWindowTicks}. Per-hit combat XP is not re-paid here — the weapon arm already
+     * paid it on the pre-Assassin damage, and the extra came from Stealth, not from the weapon.
      */
     static float applyAssassin(LivingEntity target, DamageSource source, float amount) {
-        return amount; // no-op until Task D lands
+        if (!(source.getEntity() instanceof ServerPlayer attacker)) {
+            return amount;
+        }
+        // Direct melee only, same test as the weapon arm: a projectile's direct source is the
+        // projectile, and Thorns is not a swing.
+        if (source.getDirectEntity() != attacker || source.is(DamageTypes.THORNS)) {
+            return amount;
+        }
+        if (!attacker.isShiftKeyDown() || isTargetDummy(target)) {
+            return amount;
+        }
+
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(attacker.getUUID());
+        if (mmoPlayer == null) {
+            return amount;
+        }
+        final StealthManager stealth = mmoPlayer.getStealthManager();
+        if (stealth == null
+                || !stealth.assassinReady(true, ticksSinceDamageTaken(attacker))) {
+            return amount;
+        }
+
+        NotificationManager.sendPlayerInformation(mmoPlayer, NotificationType.SUBSKILL_MESSAGE,
+                "Stealth.SubSkill.Assassin.Proc");
+        return (float) (amount * stealth.getAssassinDamageMultiplier());
     }
 
     /**
-     * Stub — filled in by Task D of docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md.
-     * Hunter Mob Mastery's flat per-tier damage bonus against a mob the player has fought before
-     * lives here in the Fabric original. ⚠️ Must stay LAST in {@link #onModifyAppliedDamage}'s
-     * attacker chain when implemented — see that method's comment on why.
+     * Hunter <b>Mob Mastery</b>: flat bonus damage against a creature this player has personally
+     * killed enough of.
+     *
+     * <p>Third sibling of {@link #applySprintSmash} and {@link #applyAssassin} on this seam, and a
+     * sibling rather than a new arm of {@code MeleeDamageBonus} for the reason those two are: that
+     * class dispatches on the <em>weapon in hand</em>, and mastery has nothing to do with what you are
+     * holding. It is in fact the only bonus here keyed on the <b>target's identity</b> — the same
+     * creature is worth the same bonus to a fist as to a netherite sword, which is why the flat figure
+     * is deliberately small.
+     *
+     * <h2>Which hits qualify</h2>
+     * Melee swings and the player's own projectiles — arrows, bolts, thrown tridents — mirroring
+     * exactly the two K1 arms above that already accept them, and no wider. Explicitly excluded:
+     * <ul>
+     *   <li><b>The wolf-bite arm.</b> A wolf's hit is credited to the wolf, so gate 1 drops it for
+     *       free; Taming's Sharpened Claws and Gore already own that damage and adding Hunter would
+     *       double-dip on one bite.</li>
+     *   <li><b>Everything else a player can be blamed for</b> — their lit TNT, a splash potion, a
+     *       Blast Mining charge. Each is attributable to the player and none is a hunt.</li>
+     *   <li><b>Thorns</b>, for the same reason Smash and Assassin refuse it: being punched is not
+     *       swinging.</li>
+     * </ul>
+     *
+     * <p><b>Spawn origin is deliberately NOT re-checked here.</b> A spawner zombie is still a zombie,
+     * and knowledge earned in the wild does not evaporate when the next one arrives on a mineshaft
+     * floor. Refusing the bonus there would close no farm — the farm earns no mastery either way —
+     * while making the damage a player sees depend on an invisible property of the mob they are
+     * hitting.
+     *
+     * <p>No notification and no XP re-paid, matching Smash and Assassin — the weapon arm already paid
+     * combat XP on the pre-bonus figure, and this damage came from Hunter, not the weapon.
+     *
+     * <p>⚠️ Must stay LAST in {@link #onModifyAppliedDamage}'s attacker chain — see that method's
+     * comment on why.
      */
     static float applyHunterMastery(LivingEntity target, DamageSource source, float amount) {
-        return amount; // no-op until Task D lands
+        // Gate 1: the hit has to be the player's. For a projectile getEntity() resolves back to the
+        // shooter, so this admits both halves at once — and keeping the two entry conditions
+        // identical is what stops "the kill counted" and "the bonus applied" drifting apart from
+        // HunterListener's own qualifyingKiller gate 1.
+        if (!(source.getEntity() instanceof ServerPlayer attacker)) {
+            return amount;
+        }
+        if (isTargetDummy(target)) {
+            return amount;
+        }
+
+        // Melee is the direct-source test the weapon arm, Smash and Assassin all use; Thorns is
+        // credited to the wearer but is not a swing.
+        final boolean melee = source.getDirectEntity() == attacker && !source.is(DamageTypes.THORNS);
+        if (!melee && !isProjectileFrom(source, attacker)) {
+            return amount;
+        }
+        if (!CombatUtils.canCombatSkillsTrigger(PrimarySkillType.HUNTER, target)) {
+            return amount;
+        }
+
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(attacker.getUUID());
+        if (mmoPlayer == null) {
+            return amount; // data not loaded (e.g. mid-join).
+        }
+        final HunterManager hunter = mmoPlayer.getHunterManager();
+        if (hunter == null) {
+            return amount;
+        }
+
+        final double bonus = hunter.masteryDamageBonusForHit(
+                HunterListener.masteryKeyOf(target), melee);
+        return bonus <= 0 ? amount : amount + (float) bonus;
+    }
+
+    /**
+     * Whether this damage was delivered by a projectile {@code attacker} fired themselves.
+     *
+     * <p>Owner identity rather than a bare {@code instanceof ServerPlayer}: the responsible entity has
+     * already been resolved, and requiring the two to agree means a projectile whose attribution and
+     * ownership disagree (a mod re-crediting a shot mid-flight) contributes nothing rather than paying
+     * the wrong player's mastery.
+     */
+    private static boolean isProjectileFrom(DamageSource source, ServerPlayer attacker) {
+        return source.getDirectEntity() instanceof AbstractArrow projectile
+                && projectile.getOwner() == attacker;
     }
 
     // --- Swords: Counter Attack ------------------------------------------------------------------
