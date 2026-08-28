@@ -969,6 +969,10 @@ public final class EntityDamageListener {
         // itself eligible for the AoE arms below.
         maybeActivateSuperAbility(mmoPlayer, weapon);
 
+        // TUNING (CONVERSION_TODO §F): LivingDamageEvent.Pre fires POST-armor, so these bonuses
+        // bypass the target's armor mitigation — a discrepancy vs legacy, which boosted the
+        // pre-armor damage. Flagged for the tuning pass; the correct seam is a pre-armor hook once
+        // one exists.
         final PlatformLivingEntity platformTarget = new PlatformLivingEntity(target);
         final float boostedDamage = MeleeDamageBonus.applyBonus(mmoPlayer, weapon, amount,
                 platformTarget);
