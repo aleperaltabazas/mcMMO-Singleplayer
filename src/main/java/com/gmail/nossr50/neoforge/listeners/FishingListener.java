@@ -105,10 +105,11 @@ import org.jetbrains.annotations.VisibleForTesting;
  * {@link #applyBookEnchantment}): a caught treasure may arrive enchanted, resolved against the
  * player's live (dynamic) enchantment registry and written with the same
  * {@link EnchantmentHelper#updateEnchantments} surface Arcane Forging uses. Conflict detection
- * ({@link #conflictsWithAny}) is a genuine reimplementation, not a mechanical port: 1.21 removed the
- * static {@code Enchantment.canBeCombined(a, b)} helper as part of the data-driven enchantment
- * rework, so "do these two enchantments conflict" is rebuilt here from each enchantment's own
- * {@link Enchantment#exclusiveSet()}. See that method's javadoc for the exact semantics.
+ * ({@link #conflictsWithAny}) delegates to vanilla's own
+ * {@link Enchantment#areCompatible(net.minecraft.core.Holder, net.minecraft.core.Holder)} — the
+ * Fabric original's static {@code Enchantment.canBeCombined(a, b)}, renamed (not removed) as part of
+ * 1.21's data-driven enchantment rework. See {@link #conflictsWithAny}'s javadoc for the exact
+ * semantics.
  */
 public final class FishingListener {
 
@@ -462,18 +463,20 @@ public final class FishingListener {
     /**
      * Whether {@code candidate} conflicts with anything already on the item or already picked in this
      * roll. Ports legacy's {@code ItemMeta#hasConflictingEnchant}, whose CraftBukkit implementation was
-     * vanilla's {@code Enchantment#canBeCombined}: not the same enchantment, and in neither party's
-     * {@code exclusiveSet}.
+     * vanilla's {@code Enchantment#canBeCombined}.
      *
-     * <p><b>Reimplemented, not ported.</b> 1.21's data-driven enchantment rework removed the static
-     * {@code Enchantment.canBeCombined(a, b)} helper this logic used to call. Its replacement is built
-     * here from each enchantment's own instance method {@link Enchantment#exclusiveSet()} — a
-     * {@code HolderSet<Enchantment>} of everything that enchantment refuses to share an item with. Two
-     * enchantments {@code a} and {@code b} conflict when {@code a} is the same enchantment as {@code b},
-     * or {@code a}'s exclusive set contains {@code b}, or {@code b}'s exclusive set contains {@code a} —
-     * checked both directions because vanilla's data is not guaranteed symmetric (e.g. one enchantment
-     * could list an exclusion the other side doesn't declare back), matching legacy's original
-     * two-sided {@code canBeCombined} semantics.
+     * <p><b>Renamed, not removed.</b> 1.21's data-driven enchantment rework renamed the Fabric
+     * original's static {@code Enchantment.canBeCombined(a, b)} to
+     * {@link Enchantment#areCompatible(net.minecraft.core.Holder, net.minecraft.core.Holder)}; the
+     * method is still public and present on vanilla's own {@code Enchantment} class (verified via
+     * {@code javap} against the patched jar — bytecode-confirmed, not assumed), and its body is exactly
+     * {@code !a.equals(b) && !a.exclusiveSet().contains(b) && !b.exclusiveSet().contains(a)}: not the
+     * same enchantment, and in neither party's {@link Enchantment#exclusiveSet()}, checked both
+     * directions (vanilla's data is not guaranteed to be declared symmetrically on both entries —
+     * {@code mending} has no {@code exclusive_set} of its own at all; only {@code infinity} declares
+     * the shared {@code exclusive_set/bow} tag both belong to). This method calls
+     * {@code areCompatible} directly rather than reimplementing its logic by hand, so there is no risk
+     * of a hand-rolled copy drifting from vanilla's own definition.
      *
      * <p>The {@code selectedSoFar} half is this port's deviation — see
      * {@link FishingManager#selectMagicHunterEnchants} for why upstream's guard never fires.
@@ -485,25 +488,16 @@ public final class FishingListener {
         final Holder<Enchantment> entry = resolved.get(candidate.enchantmentId());
 
         for (Holder<Enchantment> existing : alreadyOnItem) {
-            if (conflicts(existing, entry)) {
+            if (!Enchantment.areCompatible(existing, entry)) {
                 return true;
             }
         }
         for (EnchantmentTreasure selected : selectedSoFar) {
-            if (conflicts(resolved.get(selected.enchantmentId()), entry)) {
+            if (!Enchantment.areCompatible(resolved.get(selected.enchantmentId()), entry)) {
                 return true;
             }
         }
         return false;
-    }
-
-    /**
-     * The per-pair conflict predicate {@link #conflictsWithAny} applies to every existing enchantment:
-     * the same enchantment, or either side's {@link Enchantment#exclusiveSet()} naming the other.
-     */
-    private static boolean conflicts(Holder<Enchantment> a, Holder<Enchantment> b) {
-        return a.equals(b) || a.value().exclusiveSet().contains(b)
-                || b.value().exclusiveSet().contains(a);
     }
 
     /**
