@@ -3,17 +3,25 @@ package com.gmail.nossr50.neoforge.listeners;
 import com.gmail.nossr50.config.experience.ExperienceConfig;
 import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
+import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
 import com.gmail.nossr50.datatypes.skills.subskills.movement.DodgeResult;
 import com.gmail.nossr50.datatypes.skills.subskills.movement.RollResult;
 import com.gmail.nossr50.locale.LocaleLoader;
 import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.CombatUtils;
+import com.gmail.nossr50.platform.ItemUtils;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.ParticleEffectUtils;
 import com.gmail.nossr50.platform.PlatformLivingEntity;
 import com.gmail.nossr50.platform.PlatformSoundCategory;
 import com.gmail.nossr50.platform.text.TextUtils;
+import com.gmail.nossr50.skills.MeleeDamageBonus;
+import com.gmail.nossr50.skills.MeleeDamageBonus.MeleeWeapon;
+import com.gmail.nossr50.skills.axes.AxesManager;
+import com.gmail.nossr50.skills.maces.MacesManager;
 import com.gmail.nossr50.skills.movement.MovementManager;
+import com.gmail.nossr50.skills.spears.SpearsManager;
+import com.gmail.nossr50.skills.swords.SwordsManager;
 import com.gmail.nossr50.skills.taming.TamingManager;
 import com.gmail.nossr50.skills.unarmed.UnarmedManager;
 import com.gmail.nossr50.skills.unarmored.UnarmoredManager;
@@ -46,11 +54,13 @@ import net.minecraft.world.entity.projectile.AbstractArrow;
 import net.minecraft.world.entity.projectile.Arrow;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.entity.projectile.ThrownTrident;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 import net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.VisibleForTesting;
 
 /**
  * The K1/K2 damage hook: mcMMO's window into the vanilla damage pipeline.
@@ -84,11 +94,18 @@ import org.jetbrains.annotations.NotNull;
  * the three {@code ALLOW_DAMAGE}-veto branches (Unarmed's Arrow Deflect, Taming's Beast Lore half
  * of the bone-inspection dispatcher, and Taming's Environmentally-Aware FALL arm). Five attacker-side
  * arms are stubbed as no-op pass-throughs, clearly marked below, pending later tasks in
- * {@code docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md}: the melee weapon bonus
- * (Task B), the wolf attack bonus and Hunter's Quarry Sense half of bone-inspection and Assassin and
- * Hunter Mastery (Task D), and the projectile weapon bonus (Task C). Two defender-side arms are
- * likewise stubbed: Counter Attack (Task B) and the wolf-defense dispatch — Thick Fur / Shock Proof /
- * Holy Hound / Environmentally Aware's non-FALL arms (Task D).
+ * {@code docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md}: the wolf attack bonus
+ * and Hunter's Quarry Sense half of bone-inspection and Assassin and Hunter Mastery (Task D), and
+ * the projectile weapon bonus (Task C). One defender-side arm is likewise stubbed: the wolf-defense
+ * dispatch — Thick Fur / Shock Proof / Holy Hound / Environmentally Aware's non-FALL arms (Task D).
+ *
+ * <p><b>PORT (NeoForge, Phase 2 Task B):</b> this task fills in the melee weapon arm — Swords /
+ * Axes / Unarmed / Maces / Spears on-hit damage bonuses ({@link #applyAttackerWeaponBonus}), the
+ * combat-side super-ability activation trigger ({@link #maybeActivateSuperAbility}), Serrated
+ * Strikes, Skull Splitter, Rupture, Cripple, Momentum, and Counter Attack ({@link
+ * #maybeProcessCounterAttack}) — preserving the two ordering invariants the Fabric original
+ * documented at these seams: super-ability activation running before the damage-bonus calculation,
+ * and Counter Attack's gate reading the assailant, not the defending player.
  *
  * <p>Every attacker arm also pays that skill's <b>per-hit combat XP</b> as its closing act, exactly
  * where legacy's {@code processXCombat} methods did (see {@link CombatUtils#processCombatXP}).
@@ -370,7 +387,6 @@ public final class EntityDamageListener {
 
         // K1 attacker branch: a player landing a *melee* hit adds their weapon skill's on-hit damage
         // bonus. Runs first so a PvP defender's Dodge (below) reduces the already-boosted damage.
-        // Task B stub.
         result = applyAttackerWeaponBonus(entity, source, result);
         // ...and the other half of legacy's attacker dispatch: the damager is the player's *wolf*,
         // which adds the owner's Taming bonuses. Legacy branches on the damager's type in one
@@ -438,8 +454,7 @@ public final class EntityDamageListener {
                 }
                 // Counter Attack reflects damage but does not change what the player takes, so it
                 // runs last and returns nothing. Legacy's ordering, preserved: it reads the damage
-                // back *after* Dodge has written to it, so a dodged hit counters for less. Task B
-                // stub.
+                // back *after* Dodge has written to it, so a dodged hit counters for less.
                 maybeProcessCounterAttack(serverPlayer, source, result);
             }
         } else if (entity instanceof Wolf wolf) {
@@ -760,16 +775,286 @@ public final class EntityDamageListener {
         return (float) Math.max(mmoPlayer.getMiningManager().processDemolitionsExpertise(amount), 0.0D);
     }
 
-    // --- K1 attacker branch: melee weapon bonus (Task B stub) --------------------------------------
+    // --- K1 attacker branch: melee weapon bonus -----------------------------------------------------
 
     /**
-     * Stub — filled in by Task B/C/D of docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md.
-     * Swords Stab / Axe Mastery / Unarmed Steel Arm + Berserk / Maces Crush / Spear Mastery all live
-     * here in the Fabric original.
+     * K1 attacker branch: when a player lands a direct melee swing on a living entity, add the on-hit
+     * damage bonus for the weapon in their main hand (Swords Stab / Axe Mastery / Unarmed Steel Arm +
+     * Berserk / Maces Crush / Spears Mastery). The bonus arithmetic lives MC-free in
+     * {@link MeleeDamageBonus}; this method owns the MC-typed gating: attacker identity, the
+     * direct-melee check, and held-item classification.
      */
     private static float applyAttackerWeaponBonus(LivingEntity target, DamageSource source,
             float amount) {
-        return amount; // no-op until Task B lands
+        if (!(source.getEntity() instanceof ServerPlayer attacker)) {
+            return amount; // environmental / mob-dealt damage.
+        }
+        // Only a direct melee swing: the *direct* source of the damage is the player themselves. A
+        // ranged hit's direct source is the projectile; reflected Thorns damage is not a weapon swing.
+        if (source.getDirectEntity() != attacker || source.is(DamageTypes.THORNS)) {
+            return amount;
+        }
+        if (isTargetDummy(target)) {
+            return amount;
+        }
+
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(attacker.getUUID());
+        if (mmoPlayer == null) {
+            return amount; // data not loaded (e.g. mid-join).
+        }
+
+        final MeleeWeapon weapon = classifyMainHand(attacker.getMainHandItem());
+        if (weapon == MeleeWeapon.OTHER) {
+            return amount;
+        }
+        // Legacy gates each weapon's branch on the skill's Enabled_For_PVE/PVP switch before doing
+        // anything.
+        if (!CombatUtils.canCombatSkillsTrigger(skillOf(weapon), target)) {
+            return amount;
+        }
+        // Legacy's COMBAT-path super-ability activation. processSwordCombat / processAxeCombat /
+        // processUnarmedCombat each open with `if (manager.canActivateAbility())
+        // mmoPlayer.checkAbilityActivation(<skill>)`, which is what flips a *readied* tool into an
+        // *active* super ability when the player strikes a mob rather than a block. Without it
+        // Serrated Strikes and Skull Splitter can never activate at all — they have no block path,
+        // unlike the five block-struck abilities in SuperAbilityListener#onAttackBlock.
+        //
+        // Position is legacy's and load-bearing: activation runs BEFORE the damage bonus, so the
+        // activating hit is itself buffed (Berserk scales the very swing that turned it on) and is
+        // itself eligible for the AoE arms below.
+        maybeActivateSuperAbility(mmoPlayer, weapon);
+
+        final PlatformLivingEntity platformTarget = new PlatformLivingEntity(target);
+        final float boostedDamage = MeleeDamageBonus.applyBonus(mmoPlayer, weapon, amount,
+                platformTarget);
+
+        // Legacy's per-weapon ordering, preserved: the super-ability AoE fires after the damage
+        // bonus is computed but before it is committed, and is passed the *unboosted* damage
+        // (legacy hands it the pre-bonus damage, only overwriting it afterwards).
+        //
+        // PORT: legacy sequences the Axes AoE *between* Greater Impact and Critical Strikes rather
+        // than after the whole chain as here. Equivalent: the AoE neither reads nor writes the
+        // damage total (it is handed the unboosted amount either way) and it never touches the
+        // primary target, so only the order of the player's own chat notifications differs.
+        if (weapon == MeleeWeapon.SWORD) {
+            maybeProcessSerratedStrikes(mmoPlayer, attacker, target, amount);
+            maybeProcessRupture(mmoPlayer, target, boostedDamage);
+        } else if (weapon == MeleeWeapon.AXE) {
+            maybeProcessSkullSplitter(mmoPlayer, attacker, platformTarget, target, amount);
+        } else if (weapon == MeleeWeapon.MACE) {
+            maybeProcessCripple(mmoPlayer, target, boostedDamage);
+        } else if (weapon == MeleeWeapon.SPEAR) {
+            maybeProcessMomentum(mmoPlayer);
+        }
+
+        // Per-hit combat XP, paid on the *boosted* damage — legacy ends every processXCombat with
+        // this, after the damage is set, and its health-diff measured what actually landed. No
+        // multiplier on the melee path (legacy's 3-arg processCombatXP overload).
+        CombatUtils.processCombatXP(mmoPlayer, target, skillOf(weapon), boostedDamage);
+        return boostedDamage;
+    }
+
+    /**
+     * The combat half of the super-ability activation trigger: a strike on a living entity with a
+     * readied sword / axe / fist activates Serrated Strikes / Skull Splitter / Berserk. Ports the
+     * {@code canActivateAbility()} guard that opens legacy's {@code processSwordCombat},
+     * {@code processAxeCombat} and {@code processUnarmedCombat}.
+     *
+     * <p>The block half lives in {@code SuperAbilityListener#onAttackBlock} and covers the five
+     * abilities that are struck onto a block (Green Terra, Tree Feller, Super Breaker, Giga Drill
+     * Breaker, Berserk). Berserk is deliberately in <em>both</em>: legacy activates Unarmed off a
+     * punched mob as well as a punched block, and {@code checkAbilityActivation} is idempotent — it
+     * returns immediately when the ability is already running.
+     *
+     * <p>Only these three skills have a combat activation upstream. Maces and Tridents have no super
+     * ability, and Archery/Crossbows are not melee.
+     *
+     * <p>Package-private rather than private so the weapon→skill dispatch can be unit-tested MC-free
+     * (both parameters are MC-free).
+     */
+    static void maybeActivateSuperAbility(McMMOPlayer mmoPlayer, MeleeWeapon weapon) {
+        switch (weapon) {
+            case SWORD -> {
+                final SwordsManager swords = mmoPlayer.getSwordsManager();
+                if (swords != null && swords.canActivateAbility()) {
+                    mmoPlayer.checkAbilityActivation(PrimarySkillType.SWORDS);
+                }
+            }
+            case AXE -> {
+                final AxesManager axes = mmoPlayer.getAxesManager();
+                if (axes != null && axes.canActivateAbility()) {
+                    mmoPlayer.checkAbilityActivation(PrimarySkillType.AXES);
+                }
+            }
+            case UNARMED -> {
+                final UnarmedManager unarmed = mmoPlayer.getUnarmedManager();
+                if (unarmed != null && unarmed.canActivateAbility()) {
+                    mmoPlayer.checkAbilityActivation(PrimarySkillType.UNARMED);
+                }
+            }
+            case MACE, TRIDENT, SPEAR, OTHER -> {
+                // No super ability on these skills — legacy has no activation call in their combat
+                // paths either.
+            }
+        }
+    }
+
+    /**
+     * Swords Serrated Strikes: while the super ability is active, a sword hit also strikes nearby
+     * entities for a fraction of the damage. Mirrors legacy {@code CombatUtils#processSwordCombat}'s
+     * {@code canUseSerratedStrike} arm.
+     */
+    private static void maybeProcessSerratedStrikes(McMMOPlayer mmoPlayer,
+            ServerPlayer attacker, LivingEntity target, float damage) {
+        final SwordsManager swords = mmoPlayer.getSwordsManager();
+        if (swords == null || !swords.canUseSerratedStrike()) {
+            return;
+        }
+        CombatUtils.applyAbilityAoE(attacker, mmoPlayer, target,
+                swords.serratedStrikesDamage(damage), PrimarySkillType.SWORDS);
+    }
+
+    /**
+     * Axes Skull Splitter: while the super ability is active, an axe hit also strikes nearby entities
+     * for a fraction of the damage. Mirrors legacy {@code CombatUtils#processAxeCombat}'s
+     * {@code canUseSkullSplitter} arm.
+     */
+    private static void maybeProcessSkullSplitter(McMMOPlayer mmoPlayer, ServerPlayer attacker,
+            PlatformLivingEntity platformTarget, LivingEntity target, float damage) {
+        final AxesManager axes = mmoPlayer.getAxesManager();
+        if (axes == null || !axes.canUseSkullSplitter(platformTarget)) {
+            return;
+        }
+        CombatUtils.applyAbilityAoE(attacker, mmoPlayer, target, axes.skullSplitterDamage(damage),
+                PrimarySkillType.AXES);
+    }
+
+    /**
+     * Swords Rupture: a sword hit that leaves the target alive may start a bleed. Mirrors legacy
+     * {@code CombatUtils#processSwordCombat}, which calls {@code processRupture} only once the
+     * boosted damage is settled and only when the target survives the hit — there is no point
+     * bleeding something this swing already kills, and legacy's Rupture can never land a killing
+     * blow anyway.
+     *
+     * <p>{@link LivingDamageEvent.Pre} fires before vanilla writes the new health, so reading
+     * {@link LivingEntity#getHealth()} here gives the pre-hit health — the same value legacy's
+     * {@code target.getHealth() - event.getFinalDamage()} check saw.
+     */
+    private static void maybeProcessRupture(McMMOPlayer mmoPlayer, LivingEntity target,
+            float boostedDamage) {
+        if (target.getHealth() - boostedDamage <= 0) {
+            return; // the swing itself is lethal.
+        }
+        mmoPlayer.getSwordsManager().processRupture(new PlatformLivingEntity(target),
+                mmoPlayer.getAttackStrength());
+    }
+
+    /**
+     * Maces Cripple: a mace hit that leaves the target alive may apply Slowness. Mirrors legacy
+     * {@code CombatUtils#processMacesCombat}, which calls {@code processCripple} only when
+     * {@code target.getHealth() - event.getFinalDamage() > 0} — no point crippling something the
+     * swing kills. As with Rupture, {@link LivingDamageEvent.Pre} fires before vanilla writes the new
+     * health, so reading {@link LivingEntity#getHealth()} gives the pre-hit value that check compared
+     * against.
+     */
+    private static void maybeProcessCripple(McMMOPlayer mmoPlayer, LivingEntity target,
+            float boostedDamage) {
+        if (target.getHealth() - boostedDamage <= 0) {
+            return; // the swing itself is lethal.
+        }
+        final MacesManager maces = mmoPlayer.getMacesManager();
+        if (maces == null) {
+            return;
+        }
+        maces.processCripple(new PlatformLivingEntity(target), mmoPlayer.getAttackStrength());
+    }
+
+    /**
+     * Spears <b>Momentum</b>: a spear hit may grant the attacker a short Speed burst. Ports the
+     * {@code spearsManager.potentiallyApplyMomentum()} line that closes legacy
+     * {@code CombatUtils#processSpearsCombat}, just before its combat XP.
+     *
+     * <p>Unlike Cripple there is no survival check and no target argument at all — Momentum buffs the
+     * player who swung, so killing the mob with the same hit does not cancel it. That asymmetry is
+     * legacy's: {@code processCripple(target)} is guarded by
+     * {@code target.getHealth() - getFinalDamage() > 0}, {@code processMomentum()} is not guarded by
+     * anything.
+     */
+    private static void maybeProcessMomentum(McMMOPlayer mmoPlayer) {
+        final SpearsManager spears = mmoPlayer.getSpearsManager();
+        if (spears == null) {
+            return;
+        }
+        spears.processMomentum(mmoPlayer.getAttackStrength());
+    }
+
+    /** The primary skill a melee weapon's on-hit bonuses belong to (legacy's per-weapon dispatch). */
+    private static PrimarySkillType skillOf(MeleeWeapon weapon) {
+        return switch (weapon) {
+            case SWORD -> PrimarySkillType.SWORDS;
+            case AXE -> PrimarySkillType.AXES;
+            case MACE -> PrimarySkillType.MACES;
+            case TRIDENT -> PrimarySkillType.TRIDENTS;
+            case SPEAR -> PrimarySkillType.SPEARS;
+            case UNARMED -> PrimarySkillType.UNARMED;
+            case OTHER -> throw new IllegalArgumentException("OTHER has no skill; gate it first");
+        };
+    }
+
+    /**
+     * Classify a held main-hand stack into the melee weapon whose bonus applies. The set and the
+     * order are legacy's {@code processCombatAttack} dispatch chain, and the arms are mutually
+     * exclusive, so the order is cosmetic — except that {@code isUnarmed} must come last, since with
+     * {@code Unarmed_Items_As_Unarmed} on it matches any non-tool item and would otherwise swallow a
+     * mace or a trident.
+     *
+     * <p>{@code OTHER} means "not a weapon mcMMO trains" (a pickaxe, a block, a bow used as a club),
+     * and pays no bonus and no XP — matching legacy, whose dispatch simply has no arm for those.
+     *
+     * <p><b>Spears dispatch off the held item</b>, exactly like every other arm of this chain —
+     * {@link ItemUtils#isSpear} resolves the classification through the same registry-id lookup
+     * ({@link com.gmail.nossr50.util.MaterialMapStore}) every other weapon here uses, rather than a
+     * compile-time {@code Items.WOODEN_SPEAR} reference. That indirection is deliberate, not
+     * incidental: spear items do not exist in this branch's vanilla 1.21.1 registry at all — verified
+     * via {@code javap} against the actual compiled
+     * {@code compiledWithNeoForge_*_output.jar} (no {@code SPEAR} field on {@code Items}, no
+     * {@code SPEAR} constant on {@code DamageTypes}) — so a hardcoded item reference would fail to
+     * compile on this branch, and {@code ItemUtilsTest} resolves the constant optionally
+     * ({@code McTestRegistries.optionalVanillaItem("iron_spear")}) for exactly this reason. Until a
+     * future MC version (or this project) actually ships a spear item under one of
+     * {@code MaterialMapStore}'s ids, this arm is reachable code with nothing yet on the classpath to
+     * reach it — kept because dropping it is the exact mistake this comment's history already made
+     * once (see below).
+     *
+     * <p>⚠️ This arm was previously missing entirely, on the belief — written into a comment that
+     * used to sit here — that no spear item existed in the target MC version and the arm would
+     * therefore be dead code. Whether that belief is true varies by MC version (false for the
+     * original Fabric port's later target, confirmed true for this branch's 1.21.1 by the javap
+     * check above): the arm must stay regardless, both because it is genuinely reachable on some
+     * supported versions and because a spear held on an unreachable version simply falls through to
+     * {@code OTHER} on its own — no version-specific branching is needed for that to be safe.
+     */
+    @VisibleForTesting
+    static MeleeWeapon classifyMainHand(ItemStack held) {
+        if (ItemUtils.isSword(held)) {
+            return MeleeWeapon.SWORD;
+        }
+        if (ItemUtils.isAxe(held)) {
+            return MeleeWeapon.AXE;
+        }
+        if (ItemUtils.isMace(held)) {
+            return MeleeWeapon.MACE;
+        }
+        if (ItemUtils.isTrident(held)) {
+            return MeleeWeapon.TRIDENT;
+        }
+        if (ItemUtils.isSpear(held)) {
+            return MeleeWeapon.SPEAR;
+        }
+        if (ItemUtils.isUnarmed(held)) {
+            return MeleeWeapon.UNARMED;
+        }
+        return MeleeWeapon.OTHER;
     }
 
     /**
@@ -1005,17 +1290,61 @@ public final class EntityDamageListener {
         return amount; // no-op until Task D lands
     }
 
-    // --- Swords: Counter Attack (Task B stub) -------------------------------------------------------
+    // --- Swords: Counter Attack ------------------------------------------------------------------
 
     /**
-     * Stub — filled in by Task B of docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md.
-     * Reflecting a fraction of an incoming melee hit back at the assailant, on a successful roll,
-     * lives here in the Fabric original — including a previously-fixed upstream role-inversion bug
-     * in its {@code canCombatSkillsTrigger} gating that Task B must preserve, not silently revert.
+     * Swords Counter Attack: a player hit while holding a sword may reflect a fraction of the damage
+     * back at their assailant. Ports legacy {@code CombatUtils#processCombatAttack}'s defender arm
+     * plus {@code SwordsManager#counterAttackChecks}.
+     *
+     * <p>Only a <em>living, direct</em> damager can be countered — legacy passes {@code painSource}
+     * (the damager itself, not the projectile's shooter) and its {@code canUseCounterAttack} requires
+     * {@code instanceof LivingEntity}, so an arrow or a Blast Mining charge counters nothing.
+     *
+     * <p>⚠️ FIXED UPSTREAM BUG (a previously-fixed role-inversion bug, preserved verbatim): legacy
+     * gates this on {@code canCombatSkillsTrigger(SWORDS, target)}, but in the defender arm
+     * {@code target} would be the <em>player</em>, not the entity being acted upon. That makes
+     * {@code isPlayerOrTamed} unconditionally true, so a PvE counter against a mob is decided by
+     * {@code Enabled_For_PVP} — an operator disabling Swords for PvP silently kills counter-attacks
+     * against mobs, and one disabling it for PvE does not. Every other call site in this file passes
+     * the entity the skill acts upon; this one passes {@code assailant}, not {@code serverPlayer} —
+     * do not "simplify" this call during any future edit, that IS the fix. Both switches default to
+     * {@code true}, so the shipped config behaves identically either way.
+     *
+     * <p>Package-private rather than private so the gate can be exercised directly, the same
+     * "package-private for testing" convention {@link #onAllowDamage} and
+     * {@link #recordDamageTaken}/{@link #ticksSinceDamageTaken} already use in this file.
+     *
+     * @param damage the damage the player is taking, after any Dodge reduction
      */
-    private static void maybeProcessCounterAttack(ServerPlayer serverPlayer, DamageSource source,
+    static void maybeProcessCounterAttack(ServerPlayer serverPlayer, DamageSource source,
             float damage) {
-        // no-op until Task B lands
+        // The *direct* damager, matching legacy's painSource (not painSourceRoot).
+        if (!(source.getDirectEntity() instanceof LivingEntity assailant)) {
+            return;
+        }
+        if (!ItemUtils.isSword(serverPlayer.getMainHandItem())) {
+            return;
+        }
+        if (!CombatUtils.canCombatSkillsTrigger(PrimarySkillType.SWORDS, assailant)) {
+            return;
+        }
+
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(serverPlayer.getUUID());
+        if (mmoPlayer == null) {
+            return;
+        }
+        final SwordsManager swords = mmoPlayer.getSwordsManager();
+        if (swords == null || !swords.canUseCounterAttack() || !swords.rollCounterAttack()) {
+            return;
+        }
+
+        CombatUtils.safeDealDamage(assailant, swords.counterAttackDamage(damage), serverPlayer);
+        NotificationManager.sendPlayerInformation(mmoPlayer, NotificationType.SUBSKILL_MESSAGE,
+                "Swords.Combat.Countered");
+        // PORT: legacy also notified the countered attacker ("Swords.Combat.Counter.Hit"), which only
+        // fires `if (attacker instanceof Player)` — dead in singleplayer, where the only player is the
+        // one countering. Dropped with the rest of PvP.
     }
 
     // --- Parkour: fall damage (Roll / Graceful Roll) ------------------------------------------------
