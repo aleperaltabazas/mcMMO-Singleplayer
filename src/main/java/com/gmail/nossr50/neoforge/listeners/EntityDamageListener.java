@@ -101,12 +101,9 @@ import org.jetbrains.annotations.VisibleForTesting;
  * that has no dependency on a not-yet-ported skill listener: Parkour's Roll/Graceful Roll/Dodge/
  * Smash, Unarmored's XP/Thorny Skin, Mining's Demolitions Expertise (Blast Mining self-damage), and
  * the three {@code ALLOW_DAMAGE}-veto branches (Unarmed's Arrow Deflect, Taming's Beast Lore half
- * of the bone-inspection dispatcher, and Taming's Environmentally-Aware FALL arm). Five attacker-side
- * arms are stubbed as no-op pass-throughs, clearly marked below, pending later tasks in
- * {@code docs/superpowers/plans/2026-08-27-entity-damage-listener-plan.md}: the wolf attack bonus
- * and Hunter's Quarry Sense half of bone-inspection and Assassin and Hunter Mastery (Task D), and
- * the projectile weapon bonus (Task C). One defender-side arm is likewise stubbed: the wolf-defense
- * dispatch — Thick Fur / Shock Proof / Holy Hound / Environmentally Aware's non-FALL arms (Task D).
+ * of the bone-inspection dispatcher, and Taming's Environmentally-Aware FALL arm). The remaining
+ * skill-specific arms landed in the three tasks below; every arm of the dispatcher is real now, and
+ * nothing in this file is a stub.
  *
  * <p><b>PORT (NeoForge, Phase 2 Task B):</b> this task fills in the melee weapon arm — Swords /
  * Axes / Unarmed / Maces / Spears on-hit damage bonuses ({@link #applyAttackerWeaponBonus}), the
@@ -115,6 +112,19 @@ import org.jetbrains.annotations.VisibleForTesting;
  * #maybeProcessCounterAttack}) — preserving the two ordering invariants the Fabric original
  * documented at these seams: super-ability activation running before the damage-bonus calculation,
  * and Counter Attack's gate reading the assailant, not the defending player.
+ *
+ * <p><b>PORT (NeoForge, Phase 2 Task C):</b> the projectile arm — Archery's Skill Shot / Arrow
+ * Retrieval, Crossbows' Powered Shot and Tridents' ranged Impale ({@link
+ * #applyProjectileAttackBonus}) — plus Call of the Wild's sic-pets call ({@link
+ * #sicPetsOnRangedHit}), which is deliberately typed wider than that arm and dispatched separately
+ * from it (see its javadoc).
+ *
+ * <p><b>PORT (NeoForge, Phase 2 Task D):</b> Taming's defender half ({@link #handleWolfDamage} —
+ * Thick Fur / Environmentally Aware's non-FALL arm / Holy Hound / Shock Proof) and its attacker half
+ * ({@link #applyWolfAttackBonus}), Stealth's Assassin ({@link #applyAssassin}), Hunter's Mob Mastery
+ * ({@link #applyHunterMastery}) and the Quarry Sense half of bone-inspection. Assassin must keep
+ * running <em>before</em> Hunter Mastery in the bonus chain — pinned by
+ * {@code EntityDamageListenerHunterTest#theMasteryBonusIsAddedAfterAssassinMultiplies}.
  *
  * <p>Every attacker arm also pays that skill's <b>per-hit combat XP</b> as its closing act, exactly
  * where legacy's {@code processXCombat} methods did (see {@link CombatUtils#processCombatXP}).
@@ -197,11 +207,11 @@ public final class EntityDamageListener {
      *
      * <p>Branches, in dispatch order: Unarmed's <b>Arrow Deflect</b> (a bare-handed player swats an
      * arrow; see {@link #isArrowDeflected}), the <b>bone-inspection</b> dispatcher's <b>Beast Lore</b>
-     * half (see {@link #maybeInspect} — Hunter's Quarry Sense half is Task D territory, stubbed to
-     * {@code false} there), and Taming's <b>Environmentally Aware</b> FALL arm (a tamed wolf's fall
-     * damage is negated; see {@link #isEnvironmentallyAwareFall}). Environmentally Aware's other
-     * environmental causes only teleport the wolf and leave the hit intact, so they ride the
-     * reduce-only mixin instead (Task D's {@code handleWolfDamage}).
+     * half and Hunter's <b>Quarry Sense</b> half (see {@link #maybeInspect}), and Taming's
+     * <b>Environmentally Aware</b> FALL arm (a tamed wolf's fall damage is negated; see
+     * {@link #isEnvironmentallyAwareFall}). Environmentally Aware's other environmental causes only
+     * teleport the wolf and leave the hit intact, so they ride the reduce-only seam instead (see
+     * {@link #handleWolfDamage}).
      *
      * <p>Package-private rather than private so the tests can drive the <b>real</b> dispatcher
      * instead of the branch methods it calls — otherwise a branch could be proved in full and then
@@ -255,7 +265,7 @@ public final class EntityDamageListener {
     /**
      * Taming Environmentally Aware, FALL arm: a tamed wolf whose owner has the sub-skill takes no fall
      * damage at all (legacy's {@code case FALL: event.setCancelled(true)}). The wolf's other
-     * environmental causes teleport it clear via Task D's {@code handleWolfDamage} instead; only FALL
+     * environmental causes teleport it clear via {@link #handleWolfDamage} instead; only FALL
      * cancels.
      *
      * @return {@code true} if the fall damage should be negated (the caller should cancel the hit)
@@ -280,12 +290,11 @@ public final class EntityDamageListener {
      * tameable creature while holding a bone reads it instead of hitting it, and the blow is
      * cancelled.
      *
-     * <p>Hunter's <b>Quarry Sense</b> half was a Task A stub (hardcoded {@code false}, since it needs
-     * {@code HunterListener.masteryKeyOf}, from a Fabric listener file not ported until this task);
-     * Task D restores the real gate ({@code attacker.isShiftKeyDown() && !(entity instanceof
-     * ArmorStand) && hunter.canQuarrySense()}) and the combined message. Note this gate is
-     * deliberately different from Beast Lore's: Beast Lore has no sneak requirement at all, while
-     * Quarry Sense requires it — carried over unchanged from the Fabric original.
+     * <p>Hunter's <b>Quarry Sense</b> half shares the entry conditions but not the gate:
+     * {@code attacker.isShiftKeyDown() && !(entity instanceof ArmorStand) && hunter.canQuarrySense()}.
+     * ⚠️ That difference is deliberate and carried over unchanged from the Fabric original — Beast
+     * Lore has no sneak requirement at all, while Quarry Sense requires it — so do not "unify" the
+     * two gates. When both fire, the two readouts are joined into one message.
      *
      * @return {@code true} if the creature was inspected (the caller should cancel the hit)
      */
@@ -454,12 +463,12 @@ public final class EntityDamageListener {
         result = applyAttackerWeaponBonus(entity, source, result);
         // ...and the other half of legacy's attacker dispatch: the damager is the player's *wolf*,
         // which adds the owner's Taming bonuses. Legacy branches on the damager's type in one
-        // if/else-if chain, so at most one of these two can ever fire. Task D stub.
+        // if/else-if chain, so at most one of these two can ever fire.
         result = applyWolfAttackBonus(entity, source, result);
         // ...and the projectile arm of that same dispatch: the damager is the player's arrow,
         // crossbow bolt or thrown trident (Archery Skill Shot / Crossbows Powered Shot / Trident
         // Impale). Mutually exclusive with the two branches above — a hit's direct source is exactly
-        // one entity type — so at most one of the three fires. Task C stub.
+        // one entity type — so at most one of the three fires.
         result = applyProjectileAttackBonus(entity, source, result);
         // Call of the Wild's "sic your pets on it", for any ranged hit. ⚠️ DELIBERATELY ITS OWN
         // STATEMENT rather than a block inside applyProjectileAttackBonus — see sicPetsOnRangedHit
@@ -474,7 +483,6 @@ public final class EntityDamageListener {
         // Pass 2: Stealth Assassin. Sibling of Smash on the same seam and mutually exclusive with it
         // by construction — a player cannot sprint and sneak at once — so at most one of the two
         // fires for any swing. Runs after Smash so a backstab multiplies the whole melee total.
-        // Task D stub.
         result = applyAssassin(entity, source, result);
 
         // Pass 2: Hunter Mob Mastery. ⚠️ LAST IN THIS CHAIN, AND THE POSITION IS LOAD-BEARING.
@@ -483,8 +491,8 @@ public final class EntityDamageListener {
         // backstab × crit against a crouching player. Landing it here makes the number on the tin the
         // number that lands. It is also the only sibling keyed on the *target's* identity rather than
         // the attacker's state, so nothing below it could want to read a pre-Hunter figure.
-        // Pinned by EntityDamageListenerHunterTest#theMasteryBonusIsAddedAfterAssassinMultiplies in
-        // the Fabric original — Task D must re-create that test on this branch. Task D stub.
+        // Pinned by EntityDamageListenerHunterTest#theMasteryBonusIsAddedAfterAssassinMultiplies —
+        // swap these two lines and that test, and only that test, goes red.
         result = applyHunterMastery(entity, source, result);
 
         // K1 defender / K2 branch: the entity *taking* damage is a player — fall damage feeds
@@ -523,7 +531,7 @@ public final class EntityDamageListener {
             }
         } else if (entity instanceof Wolf wolf) {
             // Legacy's sibling `else if (livingEntity instanceof Tameable pet)` arm: the player's own
-            // wolf is taking damage, and Taming may soften or undo it. Task D stub.
+            // wolf is taking damage, and Taming may soften or undo it.
             result = handleWolfDamage(wolf, source, result);
         }
         return result;
@@ -745,7 +753,7 @@ public final class EntityDamageListener {
         return attacker instanceof LivingEntity && attacker != victim;
     }
 
-    // --- Taming defender half: wolf-damage dispatch (Task D stub) ---------------------------------
+    // --- Taming defender half: wolf-damage dispatch -----------------------------------------------
 
     /**
      * K1 defender branch, Taming half: the player's wolf is taking damage, and Taming may soften,
@@ -835,10 +843,9 @@ public final class EntityDamageListener {
      * from these damage types; the projectile ones it mapped to {@code PROJECTILE} instead, which the
      * caller tests separately via {@code IS_PROJECTILE}.
      *
-     * <p>Shared plumbing: not yet called by anything in Task A's own scope (Task D's
-     * {@code handleWolfDamage} is the only consumer, and that arm is still a stub), but implemented
-     * now per the brief so Task D's dispatch has real, verified predicates to call rather than
-     * needing to re-derive and re-verify them.
+     * <p>Shared plumbing: {@link #handleWolfDamage} is its only consumer today, but it is kept as a
+     * named predicate rather than inlined so any future Bukkit-cause mapping can reuse the same
+     * verified translation instead of re-deriving it.
      */
     private static boolean isEntityAttack(DamageSource source) {
         return source.is(DamageTypeTags.IS_PLAYER_ATTACK)
@@ -863,8 +870,8 @@ public final class EntityDamageListener {
      * Environmentally Aware treats alike (teleport the wolf clear). {@code CONTACT} is cactus / sweet
      * berry bush / dripstone, and {@code FIRE} is the <em>standing-in-fire</em> cause
      * ({@link DamageTypes#IN_FIRE}/{@link DamageTypes#CAMPFIRE}) — deliberately not {@link
-     * DamageTypes#ON_FIRE}, the burning DoT Bukkit called {@code FIRE_TICK} and that Task D's Thick
-     * Fur snuff arm handles instead.
+     * DamageTypes#ON_FIRE}, the burning DoT Bukkit called {@code FIRE_TICK} and that
+     * {@link #handleWolfDamage}'s Thick Fur snuff arm handles instead.
      */
     private static boolean isEnvironmentallyAwareCause(DamageSource source) {
         return source.is(DamageTypes.CACTUS)
@@ -1309,7 +1316,7 @@ public final class EntityDamageListener {
      * whatever they just struck.
      *
      * <h2>Why this is its own method, and not folded into the projectile-bonus arm</h2>
-     * The projectile-bonus arm (Task C's {@link #applyProjectileAttackBonus}) only sees arrows and
+     * The projectile-bonus arm ({@link #applyProjectileAttackBonus}) only sees arrows and
      * tridents, because its <em>maths</em> needs the narrower type — but a snowball, an egg, a splash
      * potion or a fired firework is still the player hitting a mob from a distance, and a thrown
      * trident is unambiguously ranged too. The Fabric original's own history records this as a
@@ -1517,7 +1524,7 @@ public final class EntityDamageListener {
     /**
      * Parkour <b>Smash</b>: a sprinting player's melee hit can land extra damage and heavy knockback.
      *
-     * <p>Shares the melee seam with Task B's {@code applyAttackerWeaponBonus} but is gated
+     * <p>Shares the melee seam with {@link #applyAttackerWeaponBonus} but is gated
      * differently on purpose. The weapon arm bails out for non-weapons, because a pickaxe has no
      * Swords bonus; Smash has nothing to do with what is being held — the sub-skill is "you hit hard
      * because you were running" — so it fires with a torch, a block, or an empty hand.
@@ -1564,7 +1571,7 @@ public final class EntityDamageListener {
         return amount + (float) agility.getSmashBonusDamage();
     }
 
-    // --- Stealth: Assassin recency window, and the Task D stubs it feeds ---------------------------
+    // --- Stealth: Assassin recency window, and the bonus arms it feeds -----------------------------
 
     /**
      * Server tick at which each player last took damage — Assassin's "before taking damage" window
@@ -1849,7 +1856,7 @@ public final class EntityDamageListener {
      * K1 defender branch: a player taking a hit from an entity may Dodge, reducing the damage and
      * (against an eligible mob) gaining Parkour XP. Mirrors legacy
      * {@code CombatUtils.processCombatAttack}'s dodge path. (The attacker-side melee weapon bonuses
-     * are handled separately in Task B's {@code applyAttackerWeaponBonus}.)
+     * are handled separately in {@link #applyAttackerWeaponBonus}.)
      */
     private static float handleDodge(ServerPlayer serverPlayer, Entity attacker, float amount) {
         // Lightning dodge can be excluded by config (legacy Agility.dodgeLightningDisabled).
