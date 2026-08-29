@@ -4,7 +4,7 @@ import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
 import com.gmail.nossr50.neoforge.McMMOMod;
-import com.gmail.nossr50.neoforge.mixin.LivingEntityDropFromLootTableAccessor;
+import com.gmail.nossr50.neoforge.mixin.LivingEntityDropFromLootTableAccessorCalls;
 import com.gmail.nossr50.platform.CombatUtils;
 import com.gmail.nossr50.platform.MobOrigins;
 import com.gmail.nossr50.platform.MobTiers;
@@ -40,9 +40,10 @@ import org.jetbrains.annotations.Nullable;
  * {@code dropFromLootTable}, {@code dropCustomDeathLoot}, {@code dropEquipment} and
  * {@code dropExperience} have all run). Both Fabric seams collapse into {@link #onLivingDrops}.
  *
- * <p>The Trophy Hunter reroll calls {@link LivingEntityDropFromLootTableAccessor} directly instead
- * of re-invoking the outer death/loot method the Fabric mixin had to re-enter: that accessor does
- * not itself post {@link LivingDropsEvent}, so there is no recursion to guard against and no
+ * <p>The Trophy Hunter reroll calls {@link LivingEntityDropFromLootTableAccessorCalls} directly
+ * instead of re-invoking the outer death/loot method the Fabric mixin had to re-enter: that
+ * accessor does not itself post {@link LivingDropsEvent}, so there is no recursion to guard against
+ * and no
  * {@code mcmmo$inBonusRoll}-style re-entrancy flag is needed on this platform.
  *
  * <p>See docs/superpowers/specs/2026-08-28-hunter-listener-design.md for the full design rationale.
@@ -102,7 +103,7 @@ public final class HunterListener {
         recordKillAndAwardXp(mmoPlayer, victim, hunter);
 
         if (hunter.rollTrophyDrop(MobTiers.tierOf(victim))
-                && LivingEntityDropFromLootTableAccessor.shouldDropLoot(victim)
+                && LivingEntityDropFromLootTableAccessorCalls.shouldDropLoot(victim)
                 && victim.level().getGameRules().getBoolean(GameRules.RULE_DOMOBLOOT)) {
             // event.isRecentlyHit() is exactly the boolean vanilla's own dropAllDeathLoot passed to
             // the FIRST dropFromLootTable call (both are literally `lastHurtByPlayerTime > 0` --
@@ -113,7 +114,7 @@ public final class HunterListener {
             // dropAllDeathLoot wraps its own dropFromLootTable call in -- without them, the reroll would
             // still drop a full roll on a baby mob, or with /gamerule doMobLoot false set, even though
             // the FIRST roll correctly dropped nothing in either case.
-            LivingEntityDropFromLootTableAccessor.invokeDropFromLootTable(victim, source,
+            LivingEntityDropFromLootTableAccessorCalls.invokeDropFromLootTable(victim, source,
                     event.isRecentlyHit());
             announceFirstTrophy(victim);
         }

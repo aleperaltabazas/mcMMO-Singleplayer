@@ -20,6 +20,16 @@ import org.spongepowered.asm.mixin.gen.Invoker;
  * for a baby mob) so a Trophy Hunter reroll can be gated the same way vanilla's own
  * {@code dropAllDeathLoot} gates its first call to {@code dropFromLootTable} — see
  * {@link com.gmail.nossr50.neoforge.listeners.HunterListener#onLivingDrops} for the caller.
+ *
+ * <p><b>Pure accessor interface — no static/default members here.</b> Sponge Mixin infers a
+ * mixin's target-type requirement (class vs. interface) from whether the mixin itself carries any
+ * concretely-implemented member. A {@code static} helper on this interface (even one with nothing
+ * to do with the {@code @Invoker}s) made Mixin classify this as an interface-to-interface mixin and
+ * reject {@link LivingEntity} — a concrete class — as an invalid target at boot
+ * ({@code InvalidMixinException: @Mixin target type mismatch}), a real crash caught only once
+ * someone actually launched the game rather than ran the unit tests (which never apply mixins at
+ * all — see this class's own test). The call-shape helpers that used to live here moved to
+ * {@link LivingEntityDropFromLootTableAccessorCalls}, a plain (non-mixin) utility class.
  */
 @Mixin(LivingEntity.class)
 public interface LivingEntityDropFromLootTableAccessor {
@@ -29,22 +39,4 @@ public interface LivingEntityDropFromLootTableAccessor {
 
     @Invoker("shouldDropLoot")
     boolean mcmmo$invokeShouldDropLoot();
-
-    /**
-     * Casts {@code self} to this interface and invokes the accessor — the call shape every caller
-     * outside this file should use, so nobody has to remember the {@code (Object)} cast mixins need.
-     */
-    static void invokeDropFromLootTable(LivingEntity self, DamageSource source,
-            boolean causedByPlayer) {
-        ((LivingEntityDropFromLootTableAccessor) self).mcmmo$invokeDropFromLootTable(source,
-                causedByPlayer);
-    }
-
-    /**
-     * Casts {@code self} to this interface and invokes the {@code shouldDropLoot} accessor — mirrors
-     * {@link #invokeDropFromLootTable} above.
-     */
-    static boolean shouldDropLoot(LivingEntity self) {
-        return ((LivingEntityDropFromLootTableAccessor) self).mcmmo$invokeShouldDropLoot();
-    }
 }

@@ -34,9 +34,11 @@ class LivingEntityDropFromLootTableAccessorTest {
 
     @Test
     void theAccessorStaticMethodExists() throws NoSuchMethodException {
-        // Verify that the accessor interface's static method exists with the correct signature.
-        // This proves the interface was declared correctly and will be callable by Task 2.
-        final Method method = LivingEntityDropFromLootTableAccessor.class.getDeclaredMethod(
+        // The call-shape helper lives on LivingEntityDropFromLootTableAccessorCalls, a plain
+        // (non-mixin) class -- see that class's own javadoc, and the mixin interface's, for why a
+        // static method cannot live on the @Mixin interface itself without breaking Mixin's
+        // target-type inference at boot.
+        final Method method = LivingEntityDropFromLootTableAccessorCalls.class.getDeclaredMethod(
                 "invokeDropFromLootTable",
                 LivingEntity.class, DamageSource.class, boolean.class);
         assertNotNull(method, "Static invokeDropFromLootTable method must exist with exact signature");
@@ -71,7 +73,7 @@ class LivingEntityDropFromLootTableAccessorTest {
 
     @Test
     void theShouldDropLootAccessorStaticMethodExists() throws NoSuchMethodException {
-        final Method method = LivingEntityDropFromLootTableAccessor.class.getDeclaredMethod(
+        final Method method = LivingEntityDropFromLootTableAccessorCalls.class.getDeclaredMethod(
                 "shouldDropLoot", LivingEntity.class);
         assertNotNull(method, "Static shouldDropLoot method must exist with exact signature");
     }
