@@ -15,6 +15,7 @@ import com.gmail.nossr50.database.ProfileStore;
 import com.gmail.nossr50.event.EventBus;
 import com.gmail.nossr50.event.SimpleEventBus;
 import com.gmail.nossr50.neoforge.commands.McMMOCommands;
+import com.gmail.nossr50.neoforge.listeners.AlchemyListener;
 import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
 import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
 import com.gmail.nossr50.neoforge.listeners.HunterListener;
@@ -227,6 +228,9 @@ public final class McMMOMod {
         // Repair/Salvage anvil dispatch (docs/superpowers/plans/2026-08-30-repair-salvage-listener-plan.md).
         RepairSalvageListener.register();
 
+        // Alchemy owner tracking + Catalysis (docs/superpowers/sdd/2026-08-30-alchemy-listener-plan).
+        AlchemyListener.register();
+
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
         // Commands construction (see RegisterCommandsEvent's javadoc), so it is registered on
@@ -338,6 +342,10 @@ public final class McMMOMod {
             // Phase 2 Task A: drop the damage hook's per-player Assassin recency window and the
             // pre-armor ThreadLocal stash, for the same reason.
             EntityDamageListener.clear();
+            // K7 Alchemy: drop the brewing-stand owner map and per-stand Catalysis state for the
+            // same reason -- neither is persisted, and both must not outlive the session whose
+            // stands they described.
+            AlchemyListener.clearOwners();
             // §A/K9: write this world's hand-placed-block flags back to its save, THEN drop them —
             // the order matters, since clearing first would persist an empty set and hand the
             // place -> mine -> repeat farm back to the player on the next load. The store
