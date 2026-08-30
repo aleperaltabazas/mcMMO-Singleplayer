@@ -39,7 +39,7 @@ and `net.minecraft.world.item.alchemy.PotionBrewing`, both included in that jar)
   Fabric-equivalent of `tick`, unchanged shape (still calls `isBrewable`/`doBrew`/decrements
   `brewTime` inline).
 
-## `PotionBrewEvent.Pre`/`.Post` — genuine simplification for the craft/XP seam
+## `PotionBrewEvent.Pre`/`.Post` — the craft/XP seam, but not mixin-free
 
 `PotionBrewEvent.Pre` is `ICancellableEvent`, exposes `getItem(int)`/`setItem(int, ItemStack)`
 over the *same 5-slot array* `doBrew` itself operates on (its own javadoc: "holding all items in
@@ -47,11 +47,19 @@ Brewer"), and per `PotionBrewEvent.Pre`'s javadoc: **"If this event is canceled,
 been modified, PotionBrewEvent.Post will automatically be fired."** — NeoForge writes the
 mutated array back into the real block entity and posts `Post` itself; nothing else to wire.
 
-This replaces the Fabric `craft` mixin outright: a plain `NeoForge.EVENT_BUS` listener on
-`PotionBrewEvent.Pre`, mirroring `AlchemyListener.onBrewCraft`'s current body 1:1 (mutate the 5
-slots via `AlchemyPotionBrewer.finishBrewing`, then cancel the event). No mixin needed for this
-seam — a genuine win, same shape as Cooking/Smelting's `ItemSmeltedEvent`/`ItemCraftedEvent`
-findings.
+This replaces the Fabric `craft` mixin's *body* (mutate the 5 slots via
+`AlchemyPotionBrewer.finishBrewing`, then cancel the event) with a plain `NeoForge.EVENT_BUS`
+listener on `PotionBrewEvent.Pre`, mirroring `AlchemyListener.onBrewCraft`'s current body 1:1.
+
+**Verified during implementation (Task B), correcting this doc's original claim:**
+`PotionBrewEvent` exposes no `BlockPos`/`Level` accessor at all — unlike the Fabric mixin's
+`craft(World, BlockPos, ...)` parameters — and hands over a *copy* of the stand's slots, not the
+live array. Resolving the brew's owner (keyed by `BlockPos`) therefore still needs a third
+mixin injector, `doBrew` HEAD on `BrewingStandTickMixin`, which stashes the position into a
+`ThreadLocal<BlockPos>` (`AlchemyListener.BREW_POSITION`) that `onPotionBrewPre` consumes. So
+this seam is **not** mixin-free: it trades the Fabric `craft` mixin's body for an event
+listener, but still needs a (thinner) injector to bridge position. See the Architecture section
+below for the corrected net injector count.
 
 **Slot indexing caveat to verify at implementation time:** confirm `PotionBrewEvent`'s 5-slot
 array is index-identical to the `DefaultedList<ItemStack>` Fabric's `craft` mixin handed
@@ -85,19 +93,24 @@ whole-inventory, side-effecting brew logic.
 
 ## Architecture
 
-Mixed, one net mixin fewer than Fabric's three:
+Mixed — matches Fabric's three injectors 1:1, just reshuffled across which seam owns which:
 
 - **Owner tracking** (unchanged in shape from Fabric): `PlayerInteractEvent.RightClickBlock`,
   same event and pattern `SuperAbilityListener.onUseBlock` already uses on this branch.
-- **Craft + XP** (was a mixin, now a plain listener): `PotionBrewEvent.Pre`, cancel-and-mutate,
-  as above.
+- **Craft + XP** (was a mixin, now a plain listener plus a thin position-bridging injector):
+  `PotionBrewEvent.Pre`, cancel-and-mutate, as above. Since `PotionBrewEvent` carries no
+  `BlockPos`/`Level`, a third injector — `doBrew` HEAD on `BrewingStandTickMixin` — stashes the
+  position into `AlchemyListener.BREW_POSITION` (a `ThreadLocal<BlockPos>`) for
+  `onPotionBrewPre` to consume.
 - **Recipe recognition** (still a mixin): one `@Inject(cancellable, HEAD)` on `isBrewable`,
   forcing `true` for a recognized mcMMO brew — direct analogue of Fabric's `canCraft` injector.
 - **Catalysis** (still a mixin): the existing accessor-mixin shape for `brewTime` (unchanged from
   Fabric, already "pure" — 2 abstract `@Accessor` methods, no static members, no boot-crash risk)
   plus one `@Inject(HEAD)` on `serverTick`, direct analogue of Fabric's `tick` injector.
 
-Net: 1 mixin file with 2 injectors (`isBrewable` force-true, `serverTick` Catalysis) + 1 pure
-accessor mixin (`brewTime`) + 1 listener class with 2 real-event methods (owner tracking,
-`PotionBrewEvent.Pre`) plus the same MC-free-delegating internals Fabric had
-(`isValidBrew`/`onBrewCraft`/`applyCatalysis`/`resolveBrewSpeed`).
+Net: 1 mixin file (`BrewingStandTickMixin`) with **3 injectors** (`isBrewable` force-true,
+`serverTick` Catalysis, `doBrew` position-bridging) + 1 pure accessor mixin (`brewTime`) + 1
+listener class with 2 real-event methods (owner tracking, `PotionBrewEvent.Pre`) plus the same
+MC-free-delegating internals Fabric had
+(`isValidBrew`/`onBrewCraft`/`applyCatalysis`/`resolveBrewSpeed`). Same total injector count as
+Fabric's three (`canCraft`, `craft`, `tick`), not one fewer.

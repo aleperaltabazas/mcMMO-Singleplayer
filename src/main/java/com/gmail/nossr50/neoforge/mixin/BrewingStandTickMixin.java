@@ -15,13 +15,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * The Alchemy recipe-recognition + Catalysis brew-speed hooks (see
+ * The Alchemy recipe-recognition, Catalysis brew-speed, and craft/XP-position hooks (see
  * docs/superpowers/specs/2026-08-30-alchemy-listener-design.md). mcMMO's brewing tree includes
- * recipes vanilla does not know, and Catalysis has to shorten a running brew's timer — while
- * vanilla still owns the fuel, the brew timer, the progress bar, and the particles.
- *
- * <p>Two of the three injections below are the recipe-recognition/Catalysis hooks described in the
- * spec; both are into {@code static} vanilla methods (hence the {@code static} handlers):
+ * recipes vanilla does not know, Catalysis has to shorten a running brew's timer, and the
+ * craft/XP seam needs the stand's position bridged to an event that does not carry one — while
+ * vanilla still owns the fuel, the brew timer, the progress bar, and the particles. Three
+ * injectors, all into {@code static} vanilla methods (hence the {@code static} handlers), one per
+ * concern:
  * <ul>
  *   <li>{@code isBrewable} (HEAD, cancellable) — forces the return value to {@code true} when the
  *       stand holds a recognised mcMMO brew ({@link AlchemyListener#isValidBrew}). This is what
@@ -33,20 +33,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  *       <i>before</i> vanilla's own decrement, which is what replaces the legacy
  *       {@code AlchemyBrewTask}'s hand-rolled brew loop. Direct analogue of the Fabric original's
  *       {@code tick} injector.</li>
+ *   <li>{@code doBrew} (HEAD) — the craft/XP position bridge. NeoForge's {@code PotionBrewEvent.Pre}
+ *       (fired from {@code doBrew}'s own head) replaces the <i>body</i> of the Fabric original's
+ *       {@code craft} injector with a plain event listener
+ *       ({@link AlchemyListener#onPotionBrewPre}), but {@code PotionBrewEvent} — confirmed via
+ *       {@code javap} and by reading its bundled source — carries no {@code BlockPos}/{@code Level}
+ *       at all (unlike the Fabric mixin's {@code craft(World, BlockPos, ...)} parameters). This
+ *       injector stashes {@code doBrew}'s own {@code BlockPos} into
+ *       {@link AlchemyListener#rememberBrewPosition} before {@code EventHooks.onPotionAttemptBrew}
+ *       (and so {@link AlchemyListener#onPotionBrewPre}) fires — see {@code AlchemyListener}'s
+ *       {@code BREW_POSITION} field javadoc for the full rationale. Net effect: this seam trades
+ *       Fabric's one {@code craft} injector for one plain listener plus this thinner injector,
+ *       landing at the same three-injector total as Fabric across this mixin.</li>
  * </ul>
- *
- * <p>The craft/XP seam (Fabric's {@code craft} injector) is <b>not</b> ported here — NeoForge's
- * {@code PotionBrewEvent.Pre}, fired from {@code doBrew}'s own head, replaces it outright with a
- * plain event listener (see {@link AlchemyListener#onPotionBrewPre}). See the spec doc's
- * "genuine simplification" section for the full rationale.
- *
- * <p>A third injector, {@code doBrew} (HEAD), <i>is</i> still needed here despite that
- * simplification: {@code PotionBrewEvent} — confirmed via {@code javap} and by reading its bundled
- * source — carries no {@code BlockPos}/{@code Level} at all (unlike the Fabric mixin's
- * {@code craft(World, BlockPos, ...)} parameters), so this stashes {@code doBrew}'s own
- * {@code BlockPos} into {@link AlchemyListener#rememberBrewPosition} before
- * {@code EventHooks.onPotionAttemptBrew} (and so {@link AlchemyListener#onPotionBrewPre}) fires —
- * see {@code AlchemyListener}'s {@code BREW_POSITION} field javadoc for the full rationale.
  *
  * <p>Signatures re-verified via {@code javap} against
  * {@code build/moddev/artifacts/neoforge-21.1.248-merged.jar}: all three methods keep their

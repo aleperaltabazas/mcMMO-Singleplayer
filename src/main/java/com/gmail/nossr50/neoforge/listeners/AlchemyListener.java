@@ -94,6 +94,7 @@ public final class AlchemyListener {
     public static void clearOwners() {
         BREWING_STAND_OWNERS.clear();
         CATALYSIS_TIMER.clear();
+        BREW_POSITION.remove();
     }
 
     /** Right-click a brewing stand → remember this player as its owner for XP-award purposes. */
@@ -132,6 +133,12 @@ public final class AlchemyListener {
      * cancelled event's array with the real block entity.
      */
     static void onPotionBrewPre(PotionBrewEvent.Pre event) {
+        // Consumed unconditionally, before the validity check, so an unrecognized (vanilla) brew
+        // never leaves a stale position sitting on the server thread — mirrors
+        // EntityDamageListener.consumePreArmorDamage's own get-then-clear ordering.
+        final BlockPos pos = BREW_POSITION.get();
+        BREW_POSITION.remove();
+
         final int length = event.getLength();
         final NonNullList<ItemStack> slots = NonNullList.withSize(length, ItemStack.EMPTY);
         for (int i = 0; i < length; i++) {
@@ -142,8 +149,6 @@ public final class AlchemyListener {
             return; // not our brew — leave the event uncancelled so vanilla (or nothing) proceeds.
         }
 
-        final BlockPos pos = BREW_POSITION.get();
-        BREW_POSITION.remove();
         onBrewCraft(pos, slots);
 
         for (int i = 0; i < length; i++) {

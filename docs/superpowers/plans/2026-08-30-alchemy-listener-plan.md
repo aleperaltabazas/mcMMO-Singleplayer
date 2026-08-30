@@ -7,8 +7,11 @@
 **Goal:** Port the Fabric mcMMO `AlchemyListener` (155 lines) and its two mixins to NeoForge
 1.21.1, unlocking the Alchemy skill (brew-owner XP + Catalysis brew-speed).
 
-**Architecture:** Mixed — one net mixin fewer than Fabric. Craft/XP becomes a plain
-`PotionBrewEvent.Pre` listener (genuine simplification, no mixin). Recipe recognition
+**Architecture:** Mixed — matches Fabric's three injectors 1:1. Craft/XP becomes a plain
+`PotionBrewEvent.Pre` listener, but (verified during Task B, correcting this plan's original
+"no mixin" claim) still needs a third injector — `doBrew` HEAD on `BrewingStandTickMixin` — to
+bridge the brewing stand's `BlockPos` into the listener via a `ThreadLocal`, since
+`PotionBrewEvent` exposes no `BlockPos`/`Level` accessor at all. Recipe recognition
 (`isBrewable`) and Catalysis (`brewTime` read/write + `serverTick` hook) stay mixins, same shape
 as Fabric's `canCraft`/`tick` injectors. Owner tracking stays a `PlayerInteractEvent.RightClickBlock`
 listener, same pattern already used by `SuperAbilityListener.onUseBlock`.

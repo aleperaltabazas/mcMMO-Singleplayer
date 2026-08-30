@@ -161,7 +161,10 @@ class AlchemyListenerBrewTest {
     @Test
     void recognizedBrewWithUnknownPositionStillFinishesButAwardsNoXp() {
         // BREW_POSITION was never set for this call (the doBrew injector never ran) -- onBrewCraft
-        // must tolerate a null BlockPos rather than NPE, and still complete the brew.
+        // must tolerate a null BlockPos rather than NPE, and still complete the brew. Not reliant
+        // on test execution order: onPotionBrewPre now consumes (get-then-clear) BREW_POSITION
+        // unconditionally at its own head on every call, and tearDown()'s clearOwners() also clears
+        // it, so no earlier test in this class can leave a stale value for this one to inherit.
         final NonNullList<ItemStack> slots = awkwardStandWith(new ItemStack(Items.SUGAR));
         final PotionBrewEvent.Pre event = eventOver(slots);
 
