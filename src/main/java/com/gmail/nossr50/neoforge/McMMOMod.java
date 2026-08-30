@@ -17,6 +17,7 @@ import com.gmail.nossr50.event.SimpleEventBus;
 import com.gmail.nossr50.neoforge.commands.McMMOCommands;
 import com.gmail.nossr50.neoforge.listeners.AlchemyListener;
 import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
+import com.gmail.nossr50.neoforge.listeners.CookingListener;
 import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
 import com.gmail.nossr50.neoforge.listeners.HunterListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
@@ -236,6 +237,10 @@ public final class McMMOMod {
         // Efficiency (docs/superpowers/sdd/2026-08-30-cooking-smelting-listener-plan, Task A).
         SmeltingListener.register();
 
+        // Cooking's own two seams: crafting-grid XP and campfire owner tracking/XP/Master Chef
+        // (docs/superpowers/sdd/2026-08-30-cooking-smelting-listener-plan, Task C).
+        CookingListener.register();
+
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
         // Commands construction (see RegisterCommandsEvent's javadoc), so it is registered on
@@ -354,6 +359,8 @@ public final class McMMOMod {
             // K7 Smelting/Cooking: drop the furnace owner map, the derived smelted-ore-product
             // index and the in-flight thread-local bridges for the same reason.
             SmeltingListener.clearOwners();
+            // K7 Cooking: drop the campfire owner map for the same reason.
+            CookingListener.clearOwners();
             // §A/K9: write this world's hand-placed-block flags back to its save, THEN drop them —
             // the order matters, since clearing first would persist an empty set and hand the
             // place -> mine -> repeat farm back to the player on the next load. The store

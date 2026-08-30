@@ -93,6 +93,21 @@ dependencies {
 
     // Mockito for MC-free unit tests that need to stand in for the platform/ adapters.
     testImplementation "org.mockito:mockito-core:${project.mockito_version}"
+
+    // MixinExtras' `@Local` sugar is only on sourceSets.main's compileClasspath (the moddev
+    // plugin wires it in for mixin annotation processing, not for the runtime classpath -- NeoForge
+    // itself supplies it at real game launch). CampfireCookMixinTest reflects over
+    // CampfireCookMixin's `@Local`-annotated parameters, which loads the annotation class at test
+    // discovery time even though the test never invokes MixinExtras' actual sugar machinery, so it
+    // needs to be resolvable here too.
+    testRuntimeOnly 'io.github.llamalad7:mixinextras-neoforge:0.5.3'
+
+    // `@Local` is retained at RetentionPolicy.CLASS, not RUNTIME (confirmed via javap -v), so
+    // standard java.lang.reflect.Parameter#getAnnotations() cannot see it at test time.
+    // CampfireCookMixinTest reads the class file's own RuntimeInvisibleParameterAnnotations
+    // attribute via ASM instead, to actually verify each capture's argsOnly value.
+    testImplementation "org.ow2.asm:asm:9.10.1"
+    testImplementation "org.ow2.asm:asm-tree:9.10.1"
 }
 
 java {

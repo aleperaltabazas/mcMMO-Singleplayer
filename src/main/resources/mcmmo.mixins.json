@@ -9,6 +9,7 @@
     "BlockPlaceMixin",
     "BrewingStandBrewTimeAccessor",
     "BrewingStandTickMixin",
+    "CampfireCookMixin",
     "ExplosionDropsMixin",
     "FishingHookRetrieveMixin",
     "FishingHookWaitTimeMixin",
@@ -16,6 +17,7 @@
     "HoeTillingActionsAccessor",
     "LivingEntityDamageMixin",
     "LivingEntityDropFromLootTableAccessor",
+    "ResultSlotMixin",
     "TntExplodeMixin"
   ],
   "injectors": {
