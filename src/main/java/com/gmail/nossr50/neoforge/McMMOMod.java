@@ -20,6 +20,7 @@ import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
 import com.gmail.nossr50.neoforge.listeners.HunterListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
+import com.gmail.nossr50.neoforge.listeners.RepairSalvageListener;
 import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.scheduler.TickScheduler;
@@ -222,6 +223,9 @@ public final class McMMOMod {
 
         // Hunter kill-counter + Trophy Hunter (docs/superpowers/plans/2026-08-28-hunter-listener-plan.md).
         HunterListener.register();
+
+        // Repair/Salvage anvil dispatch (docs/superpowers/plans/2026-08-30-repair-salvage-listener-plan.md).
+        RepairSalvageListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's

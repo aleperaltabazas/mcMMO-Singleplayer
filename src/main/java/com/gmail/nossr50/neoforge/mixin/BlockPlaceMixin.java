@@ -1,7 +1,9 @@
 package com.gmail.nossr50.neoforge.mixin;
 
+import com.gmail.nossr50.neoforge.listeners.RepairSalvageListener;
 import com.gmail.nossr50.platform.BlockUtils;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
@@ -36,15 +38,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * world-gen blocks are never marked — the port needs none of legacy's "reset to natural" hooks to
  * walk back over-marking (see {@link com.gmail.nossr50.util.PlacedBlockTracker}).
  *
- * <p><b>PORT gap, explicitly deferred (out of Task 5's scope — see
- * {@code .agent/memory/decisions.md}):</b> the Fabric original also called
- * {@code RepairSalvageListener.onAnvilPlaced(...)} from this same injection, so a placed anvil was
- * immediately classified (vanilla / mcMMO-repaired / mcMMO-salvage). {@code RepairSalvageListener}
- * (697 lines, a whole separate skill's listener) is not part of this task's "Mining + shared
- * plumbing" scope and has not been ported to {@code neoforge} yet, so that call is dropped here
- * rather than reaching into a class that doesn't exist on this branch. Anvil-placement tracking is
- * not wired for Repair/Salvage until whichever task ports {@code RepairSalvageListener}; the §A
- * hand-placed-block tracking below (this task's actual scope) is unaffected.
+ * <p>Anvil-placement tracking flows through {@link RepairSalvageListener#onAnvilPlaced}, called from
+ * this same injection: a placed anvil is immediately classified (vanilla / mcMMO-repaired /
+ * mcMMO-salvage) so the one-shot "you placed an anvil" hint can fire.
  */
 @Mixin(BlockItem.class)
 public abstract class BlockPlaceMixin {
@@ -61,6 +57,10 @@ public abstract class BlockPlaceMixin {
         final Level world = context.getLevel();
         if (world instanceof ServerLevel serverWorld) {
             BlockUtils.markPlaced(serverWorld, context.getClickedPos());
+            if (context.getPlayer() instanceof ServerPlayer serverPlayer) {
+                RepairSalvageListener.onAnvilPlaced(serverWorld, context.getClickedPos(),
+                        serverPlayer);
+            }
         }
     }
 }
