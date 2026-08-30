@@ -170,18 +170,26 @@ public final class RepairSalvageListener {
         }
     }
 
-    /** The mcMMO anvil at {@code pos}, or {@code null} when that block is neither anvil. */
+    /**
+     * The mcMMO anvil at {@code pos}, or {@code null} when that block is neither anvil (including
+     * when no world session is bound yet — this fires on the client side before the server-side
+     * gate, so {@link McMMOMod#getGeneralConfig()} may still be {@code null}; mirrors
+     * {@link McMMOMod#isRetroModeEnabled()}'s null-safe-read idiom).
+     */
     private static @Nullable AnvilKind anvilKindAt(Level world, BlockPos pos) {
+        final var generalConfig = McMMOMod.getGeneralConfig();
+        if (generalConfig == null) {
+            return null;
+        }
+
         final Block clicked = world.getBlockState(pos).getBlock();
 
-        final Block repairAnvil = anvilBlock(
-                McMMOMod.getGeneralConfig().getRepairAnvilMaterialName());
+        final Block repairAnvil = anvilBlock(generalConfig.getRepairAnvilMaterialName());
         if (repairAnvil != null && clicked == repairAnvil) {
             return AnvilKind.REPAIR;
         }
 
-        final Block salvageAnvil = anvilBlock(
-                McMMOMod.getGeneralConfig().getSalvageAnvilMaterialName());
+        final Block salvageAnvil = anvilBlock(generalConfig.getSalvageAnvilMaterialName());
         if (salvageAnvil != null && clicked == salvageAnvil) {
             return AnvilKind.SALVAGE;
         }
@@ -191,16 +199,23 @@ public final class RepairSalvageListener {
 
     /**
      * Whether mcMMO claims an anvil click made with {@code held} — that is, whether the matching
-     * skill's config knows how to work on the item. This is the whole of the client-side decision and
-     * the server side gates on the same lookup, so a click is either mcMMO's on both sides or on
-     * neither. Anything else (durability, level, materials on hand) is a <em>failure of a claimed
-     * action</em>, reported to the player by {@link #performRepair}/{@link #performSalvage}, not a
-     * reason to hand the click back to vanilla.
+     * skill is enabled in {@code coreskills.yml} and its config knows how to work on the item. This
+     * is the whole of the client-side decision and the server side gates on the same lookup, so a
+     * click is either mcMMO's on both sides or on neither. Anything else (durability, level,
+     * materials on hand) is a <em>failure of a claimed action</em>, reported to the player by
+     * {@link #performRepair}/{@link #performSalvage}, not a reason to hand the click back to
+     * vanilla.
+     *
+     * <p>The skill-gating check mirrors {@link #onAnvilPlaced}'s own {@code SkillGating} calls: with
+     * the skill disabled, a click must hand the anvil back to vanilla entirely rather than silently
+     * repairing/salvaging without XP or Super Repair.
      */
     private static boolean isAnvilAction(AnvilKind kind, ItemStack held) {
         return switch (kind) {
-            case REPAIR -> repairableInHand(held) != null;
-            case SALVAGE -> salvageableInHand(held) != null;
+            case REPAIR -> SkillGating.isSkillEnabled(PrimarySkillType.REPAIR)
+                    && repairableInHand(held) != null;
+            case SALVAGE -> SkillGating.isSkillEnabled(PrimarySkillType.SALVAGE)
+                    && salvageableInHand(held) != null;
         };
     }
 

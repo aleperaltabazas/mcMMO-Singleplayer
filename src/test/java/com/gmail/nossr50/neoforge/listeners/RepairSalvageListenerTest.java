@@ -7,8 +7,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.gmail.nossr50.config.CoreSkillsConfig;
 import com.gmail.nossr50.config.GeneralConfig;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
+import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
 import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
 import com.gmail.nossr50.skills.repair.RepairManager;
@@ -18,6 +20,10 @@ import com.gmail.nossr50.skills.salvage.salvageables.Salvageable;
 import com.gmail.nossr50.skills.salvage.salvageables.SalvageableManager;
 import com.gmail.nossr50.util.McTestRegistries;
 import com.gmail.nossr50.util.player.UserManager;
+import com.gmail.nossr50.util.text.StringUtils;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
@@ -55,6 +61,7 @@ class RepairSalvageListenerTest {
     private Level world;
     private McMMOPlayer mmoPlayer;
     private RepairManager repairManager;
+    private Path dataDir;
 
     @BeforeAll
     static void bootstrapRegistries() {
@@ -63,6 +70,7 @@ class RepairSalvageListenerTest {
 
     @BeforeEach
     void setUp(@TempDir Path dir) throws Exception {
+        dataDir = dir;
         generalConfig = new GeneralConfig(dir);
         McMMOMod.setGeneralConfig(generalConfig);
 
@@ -89,6 +97,21 @@ class RepairSalvageListenerTest {
         McMMOMod.setGeneralConfig(null);
         McMMOMod.setRepairableManager(null);
         McMMOMod.setSalvageableManager(null);
+        McMMOMod.setCoreSkillsConfig(null);
+    }
+
+    /**
+     * Wire a {@code coreskills.yml} with exactly {@code disabled} switched off, mirroring
+     * {@code SkillGatingTest#disable} — written to disk before the config is constructed so it goes
+     * through the real load path.
+     */
+    private void disable(PrimarySkillType... disabled) throws IOException {
+        final StringBuilder yaml = new StringBuilder();
+        for (PrimarySkillType skill : disabled) {
+            yaml.append(StringUtils.getCapitalized(skill.toString())).append(":\n    Enabled: false\n");
+        }
+        Files.writeString(dataDir.resolve("coreskills.yml"), yaml.toString(), StandardCharsets.UTF_8);
+        McMMOMod.setCoreSkillsConfig(new CoreSkillsConfig(dataDir));
     }
 
     @Test
@@ -157,6 +180,48 @@ class RepairSalvageListenerTest {
 
         assertEquals(TriState.DEFAULT, event.getUseItem());
         assertFalse(event.isCanceled());
+    }
+
+    @Test
+    void clientSideFireWithNoBoundConfigDoesNotThrowAndPasses() {
+        // No world session bound (config unwired) — the exact state the client-side fire can land
+        // in before the server-side gate. anvilKindAt must null-guard rather than NPE.
+        McMMOMod.setGeneralConfig(null);
+        placeAnvil(Blocks.IRON_BLOCK);
+        final PlayerInteractEvent.RightClickBlock event =
+                anvilEvent(clientPlayer(damagedChestplate()));
+
+        RepairSalvageListener.onUseBlock(event);
+
+        assertEquals(TriState.DEFAULT, event.getUseItem(),
+                "with no bound config there is no mcMMO anvil to identify — the event must be left "
+                        + "untouched for vanilla, not throw");
+    }
+
+    @Test
+    void clientSideFireOnADisabledRepairSkillPasses() throws Exception {
+        disable(PrimarySkillType.REPAIR);
+        placeAnvil(Blocks.IRON_BLOCK);
+        final PlayerInteractEvent.RightClickBlock event =
+                anvilEvent(clientPlayer(damagedChestplate()));
+
+        RepairSalvageListener.onUseBlock(event);
+
+        assertEquals(TriState.DEFAULT, event.getUseItem(),
+                "Repair disabled in coreskills.yml must hand the click back to vanilla entirely, "
+                        + "not silently repair without XP/Super Repair");
+    }
+
+    @Test
+    void clientSideFireOnADisabledSalvageSkillPasses() throws Exception {
+        disable(PrimarySkillType.SALVAGE);
+        placeAnvil(Blocks.GOLD_BLOCK);
+        final PlayerInteractEvent.RightClickBlock event =
+                anvilEvent(clientPlayer(damagedChestplate()));
+
+        RepairSalvageListener.onUseBlock(event);
+
+        assertEquals(TriState.DEFAULT, event.getUseItem());
     }
 
     @Test
