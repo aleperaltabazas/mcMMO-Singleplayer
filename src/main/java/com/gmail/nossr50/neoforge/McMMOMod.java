@@ -22,6 +22,7 @@ import com.gmail.nossr50.neoforge.listeners.HunterListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.RepairSalvageListener;
+import com.gmail.nossr50.neoforge.listeners.SmeltingListener;
 import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.scheduler.TickScheduler;
@@ -231,6 +232,10 @@ public final class McMMOMod {
         // Alchemy owner tracking + Catalysis (docs/superpowers/sdd/2026-08-30-alchemy-listener-plan).
         AlchemyListener.register();
 
+        // Smelting/Cooking furnace core: owner tracking, Smelting XP, Second Smelt, Fuel
+        // Efficiency (docs/superpowers/sdd/2026-08-30-cooking-smelting-listener-plan, Task A).
+        SmeltingListener.register();
+
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
         // Commands construction (see RegisterCommandsEvent's javadoc), so it is registered on
@@ -346,6 +351,9 @@ public final class McMMOMod {
             // same reason -- neither is persisted, and both must not outlive the session whose
             // stands they described.
             AlchemyListener.clearOwners();
+            // K7 Smelting/Cooking: drop the furnace owner map, the derived smelted-ore-product
+            // index and the in-flight thread-local bridges for the same reason.
+            SmeltingListener.clearOwners();
             // §A/K9: write this world's hand-placed-block flags back to its save, THEN drop them —
             // the order matters, since clearing first would persist an empty set and hand the
             // place -> mine -> repeat farm back to the player on the next load. The store

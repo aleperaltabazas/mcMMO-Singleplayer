@@ -4,6 +4,8 @@
   "package": "com.gmail.nossr50.neoforge.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "AbstractFurnaceGetBurnDurationMixin",
+    "AbstractFurnaceSmeltMixin",
     "BlockPlaceMixin",
     "BrewingStandBrewTimeAccessor",
     "BrewingStandTickMixin",
