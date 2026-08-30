@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -40,9 +41,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * context, so a mixin bridge is still required — but it targets a different method
  * ({@code getBurnDuration}, an <em>instance</em> method, not part of {@code serverTick}) and lives
  * in its own {@code AbstractFurnaceGetBurnDurationMixin} rather than growing this class to three
- * injectors. See {@link SmeltingListener}'s class javadoc for the full rationale. This class stays
- * at exactly the two injectors below, leaving room for Task B's {@code createExperience}
- * (Understanding the Art) injector to land as this file's third.
+ * injectors. See {@link SmeltingListener}'s class javadoc for the full rationale.
+ *
+ * <p><b>Understanding the Art's {@code createExperience} injector is this file's third</b> (Task
+ * B). {@code createExperience(ServerLevel, Vec3, int, float)} is a {@code private static} method
+ * on {@link AbstractFurnaceBlockEntity} — a different method than {@code serverTick}, but the same
+ * target class, which is why it lives here rather than in a file of its own the way the
+ * {@code getBurnDuration} bridge did (that one targets a genuinely different seam feeding a real
+ * NeoForge event; this one is a same-class {@code ModifyArg} with nothing else to bridge).
+ * Bytecode-verified (via {@code javap -c} against
+ * {@code build/moddev/artifacts/neoforge-21.1.248-merged.jar}): {@code createExperience} calls
+ * {@code ExperienceOrb.award(ServerLevel, Vec3, int)} exactly once, as its very last statement,
+ * with the computed orb size as the third argument (index 2) — the same "one XP-orb-size argument
+ * to intercept" shape {@code FishingHookRetrieveMixin#mcmmo$boostVanillaFishingXp} already uses
+ * elsewhere in this port.
  *
  * <p>Every injector carries {@code allow = 1}: each of these targets appears exactly once in its
  * target method today, and a silent second bind would double-apply the bonus rather than fail
@@ -100,5 +112,18 @@ public abstract class AbstractFurnaceSmeltMixin {
         }
         final ItemStack output = blockEntity.getItem(2); // SLOT_RESULT
         SmeltingListener.onSmeltComplete(pos, output);
+    }
+
+    @ModifyArg(
+            method = "createExperience",
+            allow = 1,
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/world/entity/ExperienceOrb;award("
+                            + "Lnet/minecraft/server/level/ServerLevel;"
+                            + "Lnet/minecraft/world/phys/Vec3;I)V"),
+            index = 2)
+    private static int mcmmo$boostVanillaXp(int amount) {
+        return SmeltingListener.boostVanillaXp(amount);
     }
 }

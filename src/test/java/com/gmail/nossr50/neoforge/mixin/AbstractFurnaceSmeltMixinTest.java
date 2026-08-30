@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 import com.gmail.nossr50.util.McTestRegistries;
 
 /**
@@ -58,6 +59,15 @@ class AbstractFurnaceSmeltMixinTest {
     private static final String SET_RECIPE_USED_TARGET =
             "Lnet/minecraft/world/level/block/entity/AbstractFurnaceBlockEntity;"
                     + "setRecipeUsed(Lnet/minecraft/world/item/crafting/RecipeHolder;)V";
+
+    /**
+     * {@code ExperienceOrb.award}'s exact descriptor, re-verified via {@code javap -p -c} against
+     * the merged jar (read from {@code createExperience}'s own bytecode).
+     */
+    private static final String EXPERIENCE_ORB_AWARD_TARGET =
+            "Lnet/minecraft/world/entity/ExperienceOrb;award("
+                    + "Lnet/minecraft/server/level/ServerLevel;"
+                    + "Lnet/minecraft/world/phys/Vec3;I)V";
 
     @Test
     void furnaceSmeltHandlerIsAnInjectorAtTheBurnInvoke() throws NoSuchMethodException {
@@ -124,6 +134,39 @@ class AbstractFurnaceSmeltMixinTest {
         assertTrue(Modifier.isPublic(setRecipeUsed.getModifiers()), "setRecipeUsed must be public");
         assertTrue(!Modifier.isStatic(setRecipeUsed.getModifiers()),
                 "setRecipeUsed is an instance method, unlike the Fabric original's setLastRecipe");
+    }
+
+    @Test
+    void boostVanillaXpHandlerIsAModifyArgOnExperienceOrbAward() throws NoSuchMethodException {
+        final Method handler = AbstractFurnaceSmeltMixin.class.getDeclaredMethod(
+                "mcmmo$boostVanillaXp", int.class);
+        assertNotNull(handler, "mcmmo$boostVanillaXp must exist taking createExperience's amount");
+        assertTrue(Modifier.isStatic(handler.getModifiers()),
+                "the handler for a static target method must itself be static");
+        assertEquals(int.class, handler.getReturnType());
+
+        final ModifyArg modifyArg = handler.getAnnotation(ModifyArg.class);
+        assertNotNull(modifyArg, "mcmmo$boostVanillaXp must be annotated with @ModifyArg");
+        assertEquals("createExperience", modifyArg.method()[0]);
+        assertEquals(1, modifyArg.allow(), "allow = 1 so a silent second bind fails loudly");
+        assertEquals(2, modifyArg.index(), "amount is the third argument to ExperienceOrb.award");
+
+        final At at = modifyArg.at();
+        assertEquals("INVOKE", at.value());
+        assertEquals(EXPERIENCE_ORB_AWARD_TARGET, at.target());
+    }
+
+    @Test
+    void theTargetClassActuallyDeclaresCreateExperienceWithTheExpectedShape()
+            throws NoSuchMethodException {
+        final Method createExperience = AbstractFurnaceBlockEntity.class.getDeclaredMethod(
+                "createExperience", ServerLevel.class, net.minecraft.world.phys.Vec3.class,
+                int.class, float.class);
+        assertTrue(Modifier.isStatic(createExperience.getModifiers()),
+                "createExperience must be static");
+        assertTrue(Modifier.isPrivate(createExperience.getModifiers()),
+                "createExperience must be private");
+        assertEquals(void.class, createExperience.getReturnType());
     }
 
     /**

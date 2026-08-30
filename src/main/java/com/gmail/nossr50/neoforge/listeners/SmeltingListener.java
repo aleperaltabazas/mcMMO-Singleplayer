@@ -559,6 +559,15 @@ public final class SmeltingListener {
     }
 
     /**
+     * Test seam: set the smelted-ore-product index directly, without needing a real server start
+     * or data-pack reload to run {@link #indexSmeltedOreProducts}. See {@link #beginFurnaceExtract}
+     * for the gate this bypasses.
+     */
+    static void setSmeltedOreProductsForTesting(Set<Item> products) {
+        smeltedOreProducts = Set.copyOf(products);
+    }
+
+    /**
      * e.g. {@code minecraft:iron_ore} → {@code "Iron_Ore"}, the key the smelting and cooking
      * configs are both written against.
      *

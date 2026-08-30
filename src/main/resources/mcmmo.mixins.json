@@ -12,6 +12,7 @@
     "ExplosionDropsMixin",
     "FishingHookRetrieveMixin",
     "FishingHookWaitTimeMixin",
+    "FurnaceResultSlotMixin",
     "HoeTillingActionsAccessor",
     "LivingEntityDamageMixin",
     "LivingEntityDropFromLootTableAccessor",
