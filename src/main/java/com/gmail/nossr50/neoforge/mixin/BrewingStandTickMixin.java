@@ -20,7 +20,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * recipes vanilla does not know, and Catalysis has to shorten a running brew's timer — while
  * vanilla still owns the fuel, the brew timer, the progress bar, and the particles.
  *
- * <p>Two injections, both into {@code static} vanilla methods (hence the {@code static} handlers):
+ * <p>Two of the three injections below are the recipe-recognition/Catalysis hooks described in the
+ * spec; both are into {@code static} vanilla methods (hence the {@code static} handlers):
  * <ul>
  *   <li>{@code isBrewable} (HEAD, cancellable) — forces the return value to {@code true} when the
  *       stand holds a recognised mcMMO brew ({@link AlchemyListener#isValidBrew}). This is what
@@ -39,11 +40,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * plain event listener (see {@link AlchemyListener#onPotionBrewPre}). See the spec doc's
  * "genuine simplification" section for the full rationale.
  *
+ * <p>A third injector, {@code doBrew} (HEAD), <i>is</i> still needed here despite that
+ * simplification: {@code PotionBrewEvent} — confirmed via {@code javap} and by reading its bundled
+ * source — carries no {@code BlockPos}/{@code Level} at all (unlike the Fabric mixin's
+ * {@code craft(World, BlockPos, ...)} parameters), so this stashes {@code doBrew}'s own
+ * {@code BlockPos} into {@link AlchemyListener#rememberBrewPosition} before
+ * {@code EventHooks.onPotionAttemptBrew} (and so {@link AlchemyListener#onPotionBrewPre}) fires —
+ * see {@code AlchemyListener}'s {@code BREW_POSITION} field javadoc for the full rationale.
+ *
  * <p>Signatures re-verified via {@code javap} against
- * {@code build/moddev/artifacts/neoforge-21.1.248-merged.jar}: both methods keep their Fabric-era
- * shape (just retyped/renamed — {@code DefaultedList} to {@code NonNullList},
- * {@code BrewingRecipeRegistry} to {@code PotionBrewing}), and both injectors need only
- * {@code allow = 1} (there is exactly one {@code isBrewable}/{@code serverTick} on this class).
+ * {@code build/moddev/artifacts/neoforge-21.1.248-merged.jar}: all three methods keep their
+ * Fabric-era shape (just retyped/renamed — {@code DefaultedList} to {@code NonNullList},
+ * {@code BrewingRecipeRegistry} to {@code PotionBrewing}), and all three injectors need only
+ * {@code allow = 1} (there is exactly one {@code isBrewable}/{@code serverTick}/{@code doBrew} on
+ * this class).
  */
 @Mixin(BrewingStandBlockEntity.class)
 public abstract class BrewingStandTickMixin {
@@ -60,5 +70,11 @@ public abstract class BrewingStandTickMixin {
     private static void mcmmo$applyCatalysisBrewSpeed(Level level, BlockPos pos, BlockState state,
             BrewingStandBlockEntity blockEntity, CallbackInfo ci) {
         AlchemyListener.applyCatalysis(pos, blockEntity);
+    }
+
+    @Inject(method = "doBrew", allow = 1, at = @At("HEAD"))
+    private static void mcmmo$rememberBrewPosition(Level level, BlockPos pos,
+            NonNullList<ItemStack> slots, CallbackInfo ci) {
+        AlchemyListener.rememberBrewPosition(pos);
     }
 }

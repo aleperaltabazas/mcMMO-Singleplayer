@@ -4,6 +4,8 @@ import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
 import com.gmail.nossr50.datatypes.skills.SubSkillType;
 import com.gmail.nossr50.neoforge.mixin.BrewingStandBrewTimeAccessor;
+import com.gmail.nossr50.platform.PlatformInventory;
+import com.gmail.nossr50.skills.alchemy.AlchemyPotionBrewer;
 import com.gmail.nossr50.skills.alchemy.CatalysisTimer;
 import com.gmail.nossr50.util.Permissions;
 import com.gmail.nossr50.util.player.UserManager;
@@ -20,6 +22,7 @@ import net.minecraft.world.level.block.entity.BrewingStandBlockEntity;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.brewing.PotionBrewEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The Alchemy XP hook: awards Alchemy XP when a brewing stand the player owns completes an mcMMO
@@ -38,8 +41,10 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
  *       one XP.</li>
  *   <li><b>Brew detection + craft</b> — {@link #isValidBrew} is called from
  *       {@code BrewingStandTickMixin}'s {@code isBrewable} injector; {@link #onPotionBrewPre} is a
- *       plain listener on {@link PotionBrewEvent.Pre}. <b>Stubbed in this task</b> — see the
- *       method javadocs.</li>
+ *       plain listener on {@link PotionBrewEvent.Pre} that resolves the owner via
+ *       {@link #onBrewCraft} and cancels the event. {@link PotionBrewEvent} itself carries no
+ *       {@code BlockPos}, so {@code BrewingStandTickMixin}'s {@code doBrew} injector bridges it
+ *       through {@link #BREW_POSITION} — see that field's javadoc.</li>
  *   <li><b>Catalysis brew speed</b> — {@link #applyCatalysis}, called from
  *       {@code BrewingStandTickMixin}'s {@code serverTick} injector, shortens the owner's brew by
  *       the Catalysis multiplier. This is what replaces the legacy {@code AlchemyBrewTask}, whose
@@ -58,6 +63,23 @@ public final class AlchemyListener {
 
     /** Per-stand Catalysis state: the speed captured at brew start, plus its carried fraction. */
     private static final CatalysisTimer CATALYSIS_TIMER = new CatalysisTimer();
+
+    /**
+     * The brewing-stand position for the {@code doBrew} call currently in flight on this thread, set
+     * by {@code BrewingStandTickMixin}'s {@code doBrew} HEAD injector and consumed once by
+     * {@link #onPotionBrewPre}.
+     *
+     * <p>Needed because {@link PotionBrewEvent} — confirmed via {@code javap} against
+     * {@code build/moddev/artifacts/neoforge-21.1.248-merged.jar} and by reading its bundled source
+     * — exposes only {@code getItem(int)}/{@code setItem(int, ItemStack)}/{@code getLength()} over a
+     * <em>copy</em> of the stand's slots (see {@code EventHooks.onPotionAttemptBrew}, which builds a
+     * fresh {@code NonNullList} before constructing {@code PotionBrewEvent.Pre}); it carries no
+     * {@code BlockPos}/{@code Level} at all, unlike the Fabric mixin's {@code craft(World, BlockPos,
+     * ...)} parameters. This thread-local bridges the mixin's context to the event handler, the same
+     * shape {@code EntityDamageListener}'s {@code PRE_ARMOR_DAMAGE} uses to join a mixin injection to
+     * the event it precedes within one call frame.
+     */
+    private static final ThreadLocal<BlockPos> BREW_POSITION = new ThreadLocal<>();
 
     private AlchemyListener() {
     }
@@ -92,14 +114,9 @@ public final class AlchemyListener {
      * Whether the brewing stand's contents form a valid mcMMO brew. Called from
      * {@code BrewingStandTickMixin}'s {@code isBrewable} injector to force vanilla to
      * start/continue a brew for recipes it does not itself recognise.
-     *
-     * <p><b>Stub — Task B fills this in.</b> Always returns {@code false} for now, so the stand
-     * simply won't recognize mcMMO-only brews until then; vanilla-valid recipes are unaffected
-     * either way, since {@code isBrewable}'s own vanilla logic still runs regardless of this
-     * return value.
      */
     public static boolean isValidBrew(NonNullList<ItemStack> slots) {
-        return false;
+        return AlchemyPotionBrewer.isValidBrew(new PlatformInventory(slots));
     }
 
     /**
@@ -107,9 +124,63 @@ public final class AlchemyListener {
      * {@code doBrew} at its own head. See the spec doc for why this replaces the Fabric original's
      * {@code craft} mixin outright.
      *
-     * <p><b>Stub — Task B fills this in.</b> Empty body for now.
+     * <p>{@link PotionBrewEvent} hands over only a <em>copy</em> of the stand's 5 slots (see
+     * {@link #BREW_POSITION}'s javadoc), so this reads that copy into a real {@link NonNullList},
+     * lets {@link #onBrewCraft} mutate it in place exactly as {@code AlchemyPotionBrewer} always has,
+     * then writes the result back through {@link PotionBrewEvent#setItem} before cancelling — the
+     * same copy-out/copy-back shape {@code EventHooks.onPotionAttemptBrew} itself uses to reconcile a
+     * cancelled event's array with the real block entity.
      */
-    private static void onPotionBrewPre(PotionBrewEvent.Pre event) {
+    static void onPotionBrewPre(PotionBrewEvent.Pre event) {
+        final int length = event.getLength();
+        final NonNullList<ItemStack> slots = NonNullList.withSize(length, ItemStack.EMPTY);
+        for (int i = 0; i < length; i++) {
+            slots.set(i, event.getItem(i));
+        }
+
+        if (!isValidBrew(slots)) {
+            return; // not our brew — leave the event uncancelled so vanilla (or nothing) proceeds.
+        }
+
+        final BlockPos pos = BREW_POSITION.get();
+        BREW_POSITION.remove();
+        onBrewCraft(pos, slots);
+
+        for (int i = 0; i < length; i++) {
+            event.setItem(i, slots.get(i));
+        }
+        event.setCanceled(true);
+    }
+
+    /**
+     * Complete an mcMMO brew and award XP to the stand's owner. Called from {@link #onPotionBrewPre}
+     * with the position {@code BrewingStandTickMixin}'s {@code doBrew} injector captured for this
+     * call. The brew still finishes when the stand has no tracked owner (or {@code pos} itself is
+     * {@code null}, e.g. the capturing injector never ran) — it just earns no XP, matching the Fabric
+     * original's unattended-brew behaviour.
+     *
+     * @param pos   the brewing stand position, or {@code null} if unknown
+     * @param slots the brewing-stand inventory to transform in place
+     */
+    public static void onBrewCraft(@Nullable BlockPos pos, NonNullList<ItemStack> slots) {
+        McMMOPlayer owner = null;
+        if (pos != null) {
+            final UUID ownerId = BREWING_STAND_OWNERS.get(pos.asLong());
+            if (ownerId != null) {
+                owner = UserManager.getPlayer(ownerId);
+            }
+        }
+        AlchemyPotionBrewer.finishBrewing(new PlatformInventory(slots), owner);
+    }
+
+    /**
+     * Mixin seam: stash the brewing stand position {@code doBrew} is about to run for. Called from
+     * {@code BrewingStandTickMixin}'s {@code doBrew} HEAD injector, before
+     * {@code EventHooks.onPotionAttemptBrew} (and so before {@link PotionBrewEvent.Pre}) fires — see
+     * {@link #BREW_POSITION}'s javadoc for why this bridge exists at all.
+     */
+    public static void rememberBrewPosition(BlockPos pos) {
+        BREW_POSITION.set(pos);
     }
 
     /**
