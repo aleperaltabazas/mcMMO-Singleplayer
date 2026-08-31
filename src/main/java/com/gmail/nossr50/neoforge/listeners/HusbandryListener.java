@@ -1143,5 +1143,8 @@ public final class HusbandryListener {
      */
     public static void clear() {
         PLAYER_INTERACTION.remove();
+        SPREADING_LOVE.remove();
+        SHEAR_BONUS.remove();
+        SELECTIVE_BREEDING.remove();
     }
 }
