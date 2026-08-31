@@ -1,26 +1,39 @@
 package com.gmail.nossr50.neoforge.listeners;
 
 import com.gmail.nossr50.config.experience.ExperienceConfig;
+import com.gmail.nossr50.config.treasure.TreasureConfig;
 import com.gmail.nossr50.datatypes.interactions.NotificationType;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
+import com.gmail.nossr50.datatypes.skills.PrimarySkillType;
+import com.gmail.nossr50.datatypes.treasure.HusbandryTreasure;
 import com.gmail.nossr50.neoforge.McMMOAttachments;
 import com.gmail.nossr50.neoforge.McMMOMod;
+import com.gmail.nossr50.platform.ItemSpecBuilder;
+import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.skills.husbandry.HusbandryManager;
 import com.gmail.nossr50.util.LogUtils;
+import com.gmail.nossr50.util.Misc;
 import com.gmail.nossr50.util.player.NotificationManager;
 import com.gmail.nossr50.util.player.UserManager;
+import com.gmail.nossr50.util.random.ProbabilityUtil;
 import com.gmail.nossr50.util.text.ConfigStringUtils;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.AgeableMob;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BeehiveBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.AABB;
 import org.jetbrains.annotations.Nullable;
@@ -461,6 +474,463 @@ public final class HusbandryListener {
         if (husbandry != null) {
             husbandry.onRaise(configStringOf(animal));
         }
+    }
+
+    // =============================================================================================
+    // Task C: Harvest family — Shear, Hive, Milk, Brush, Hidden Bounty, D-H5 cooldown. Ports the
+    // Fabric original's stage 3/4/5-harvest sections onto Mojang-mapped 1.21.1 names — see
+    // neoforge.mixin.ShearsItemInteractMixin / BeehiveBlockUseItemOnMixin / CowGoatMilkMixin /
+    // MushroomCowStewMixin / ArmadilloBrushMixin for the seams these methods are called from.
+    //
+    // Shear is a genuine redesign, not a transcription (design spec §5): NeoForge unifies every
+    // shearable species behind ShearsItem#interactLivingEntity + IShearable, so there is no
+    // per-species mixin here at all, and the player is already a direct method parameter at that
+    // seam — unlike every other verb in this class, shear needs no interaction-stash lookup.
+    // =============================================================================================
+
+    /**
+     * Open for exactly the duration of one {@code interactLivingEntity} call that actually sheared
+     * something, and {@code true} only when that shear both belongs to a player and won its
+     * {@code Bountiful Harvest} roll.
+     *
+     * <p>A {@link ThreadLocal} for the same reason as {@link #PLAYER_INTERACTION}: the value is
+     * only ever read on the thread that set it, on the same call stack, and it must not survive an
+     * exception on an unrelated one.
+     *
+     * <p>🔑 <b>The window is what makes hooking the {@code drops} local safe.</b> Doubling every
+     * item in that list unconditionally would double drops from a shear this player did not pay
+     * for (there is none such today — this is not the dispenser gate, which is structural per the
+     * class javadoc above — but gating on an explicitly opened window is what keeps the two
+     * concerns separate rather than folding "is this a real harvest" into the doubling logic
+     * itself).
+     */
+    private static final ThreadLocal<Boolean> SHEAR_BONUS = ThreadLocal.withInitial(() -> false);
+
+    /**
+     * A shear is starting and vanilla has already confirmed {@code sheared} is willing to be
+     * sheared ({@code IShearable#isShearable} returned {@code true}): pay the shear verb, roll
+     * Hidden Bounty, and decide {@code Bountiful Harvest} once for the whole shear.
+     *
+     * <p>Called from {@code ShearsItemInteractMixin}, which — unlike every other verb hook in this
+     * class — hands the player over as a direct parameter rather than through
+     * {@link #PLAYER_INTERACTION}: {@code ShearsItem#interactLivingEntity(ItemStack, Player,
+     * LivingEntity, InteractionHand)} already has one in scope, and no dispenser reaches this
+     * method at all (see the mixin's own javadoc for the bytecode confirming
+     * {@code ShearsDispenseItemBehavior} calls {@code IShearable#onSheared} directly with a
+     * {@code null} player, never through here).
+     *
+     * <p>⚠️ <b>Rolled ONCE per shear rather than per item</b>, matching the Fabric original: a sheep
+     * that yields three wool would otherwise resolve the sub-skill three times and turn a clean
+     * "this shear paid double" into a noisy partial one.
+     */
+    public static void beginShear(LivingEntity sheared, Player player) {
+        SHEAR_BONUS.set(false);
+        if (sheared == null || !(player instanceof ServerPlayer serverPlayer)) {
+            return; // Client-side mirror of this call, or (structurally impossible) no player.
+        }
+        final HusbandryManager husbandry = husbandryOf(serverPlayer);
+        if (husbandry == null) {
+            return; // Player data not loaded.
+        }
+        husbandry.onShear();
+        rollHiddenBounty(husbandry, serverPlayer, HIDDEN_BOUNTY_SHEAR);
+        SHEAR_BONUS.set(husbandry.rollBonusHarvestDrop());
+    }
+
+    /**
+     * The shear call is over, whichever branch it returned from — {@code IShearable} declined, or a
+     * real shear happened. Called from both of {@code interactLivingEntity}'s {@code areturn}s.
+     */
+    public static void endShear() {
+        SHEAR_BONUS.remove();
+    }
+
+    /**
+     * {@code Bountiful Harvest}: hand back a doubled stack while a winning shear window is open.
+     *
+     * <p>Doubling the stack rather than dropping a second one is deliberate — it is one
+     * {@code ItemEntity} instead of two (via {@code IShearable#spawnShearedDrop}, which the mixin
+     * lets run unmodified against whatever this returns), and it cannot desynchronise from the
+     * first drop's position or pickup delay.
+     *
+     * @return {@code stack} untouched unless a shear window is open and won its roll
+     */
+    public static ItemStack onShearDropStack(ItemStack stack) {
+        if (stack == null || stack.isEmpty() || !Boolean.TRUE.equals(SHEAR_BONUS.get())) {
+            return stack;
+        }
+        final ItemStack doubled = stack.copy();
+        doubled.setCount(stack.getCount() * 2);
+        return doubled;
+    }
+
+    /**
+     * A shearing tool is about to take {@code damageAmount} durability: let {@code Bountiful
+     * Harvest} spare it.
+     *
+     * <p>Called from {@code ShearsItemInteractMixin}'s {@code @ModifyArg} on
+     * {@code stack.hurtAndBreak(1, player, ...)} — reached only inside the same server-side,
+     * already-shearable branch {@link #beginShear} opened its window for, so no extra gate is
+     * needed here beyond the real-player check.
+     *
+     * @param player       whoever is holding the shears
+     * @param damageAmount the durability vanilla was about to take
+     * @return {@code damageAmount}, or {@code 0} on a successful save
+     */
+    public static int onShearToolDamaged(Player player, int damageAmount) {
+        if (damageAmount <= 0 || !(player instanceof ServerPlayer serverPlayer)) {
+            return damageAmount;
+        }
+        final HusbandryManager husbandry = husbandryOf(serverPlayer);
+        if (husbandry == null) {
+            return damageAmount;
+        }
+        return husbandry.rollToolDurabilitySave() ? 0 : damageAmount;
+    }
+
+    // --- Hive, Beekeeper and the hive durability save ----------------------------------------------
+
+    /**
+     * The {@code treasures.yml} {@code Drops_From} verb groups {@code Hidden Bounty} is keyed on.
+     * Named constants rather than inline literals because they must match the shipped YAML exactly
+     * and a typo would be a sub-skill that silently never finds anything — pinned by
+     * {@code HusbandryListenerHiveTest}.
+     */
+    static final String HIDDEN_BOUNTY_SHEAR = "Shear";
+    static final String HIDDEN_BOUNTY_HIVE = "Hive";
+    static final String HIDDEN_BOUNTY_MILK = "Milk";
+    static final String HIDDEN_BOUNTY_BRUSH = "Brush";
+
+    /**
+     * A hive gave up its honeycomb to a player's shears: pay the hive verb, and let
+     * {@code Bountiful Harvest} and {@code Beekeeper} add to the haul.
+     *
+     * <p>Called from {@code BeehiveBlockUseItemOnMixin}, right after {@code BeehiveBlock}'s own
+     * {@code dropHoneycomb(Level, BlockPos)} call — the one point in {@code useItemOn} that is
+     * reached only when a real player's shears actually harvested a full hive (see the mixin's own
+     * javadoc for why {@code useItemOn} itself, not either sub-primitive, is the hook, and for the
+     * bytecode confirming neither {@code ShearsDispenseItemBehavior} nor any hive dispenser
+     * behaviour reaches this path).
+     *
+     * @param player   the harvester
+     * @param usedItem the shears in their hand, already worn by this harvest
+     * @param state    the hive's state, still reading a full honey level at this point
+     * @param level    the hive's world
+     * @param pos      the hive
+     */
+    public static void onHoneycombHarvested(Player player, ItemStack usedItem, BlockState state,
+            Level level, BlockPos pos) {
+        if (!(player instanceof ServerPlayer serverPlayer) || !(level instanceof ServerLevel serverLevel)) {
+            return;
+        }
+        final HusbandryManager husbandry = husbandryOf(serverPlayer);
+        if (husbandry == null) {
+            return;
+        }
+        husbandry.onHiveHarvest();
+
+        // Delivered as extra rolls of vanilla's own harvest loot rather than as honeycombs we
+        // fabricate, exactly as the shear bonus re-runs the species' own drop handler: the yield
+        // stays whatever the game says a hive yields, including any future change to it.
+        for (int helping = bonusHiveHelpings(husbandry); helping > 0; helping--) {
+            BeehiveBlock.dropHoneycomb(serverLevel, pos);
+        }
+        rollHiddenBounty(husbandry, serverPlayer, HIDDEN_BOUNTY_HIVE);
+    }
+
+    /**
+     * A hive gave up a bottle of honey to a player: pay the hive verb, and let {@code Bountiful
+     * Harvest} and {@code Beekeeper} add to the haul.
+     *
+     * <p>The bottle half of the same verb, hooked separately from {@link #onHoneycombHarvested}
+     * because the two halves of {@code useItemOn} produce their yields by completely different
+     * means — the shears roll a loot table, the bottle hands over one hard-coded
+     * {@code HONEY_BOTTLE} — and because splitting them is what makes each hook unambiguous about
+     * which harvest it is looking at.
+     *
+     * @param player the harvester
+     */
+    public static void onHoneyBottled(Player player) {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return;
+        }
+        final HusbandryManager husbandry = husbandryOf(serverPlayer);
+        if (husbandry == null) {
+            return;
+        }
+        husbandry.onHiveHarvest();
+
+        for (int helping = bonusHiveHelpings(husbandry); helping > 0; helping--) {
+            giveOrDrop(serverPlayer, new ItemStack(Items.HONEY_BOTTLE));
+        }
+        rollHiddenBounty(husbandry, serverPlayer, HIDDEN_BOUNTY_HIVE);
+    }
+
+    /**
+     * How many <em>extra</em> helpings this hive harvest yields, 0–2.
+     *
+     * <p>The two rolls stack rather than being an either/or, which is the deliberate difference
+     * between the harvest family's general bonus and the bee specialist's: a maxed beekeeper should
+     * visibly out-yield a maxed generalist at a hive, and cannot if their sub-skill only re-rolls
+     * the same coin.
+     *
+     * <p>Package-private so the stacking can be asserted directly. The delivery it feeds cannot be
+     * unit-tested — an extra {@code dropHoneycomb} roll needs a real {@code ServerLevel} — so the
+     * arithmetic is pinned here and the delivery is a boot-check-only concern.
+     */
+    static int bonusHiveHelpings(HusbandryManager husbandry) {
+        return (husbandry.rollBonusHarvestDrop() ? 1 : 0) + (husbandry.rollBonusHoney() ? 1 : 0);
+    }
+
+    /**
+     * Whether this player's hive harvests leave the bees alone — {@code Beekeeper}.
+     *
+     * <p>Called from {@code BeehiveBlockUseItemOnMixin}, which feeds the answer into vanilla's own
+     * {@code CampfireBlock.isSmokeyPos} test via a {@code @ModifyExpressionValue}.
+     *
+     * <h2>⚠️ Polarity, spelled out because transcribing the Fabric expression here is backwards</h2>
+     * Fabric's hook widened a {@code true} ("lit campfire in range") into "also calm if my
+     * sub-skill says so" — {@code return litCampfireInRange || sheltered;}. 1.21.1's branch is
+     * gated the other way round: {@code if (!CampfireBlock.isSmokeyPos(...)) { ...anger the hive... }
+     * else { ...calm reset... }} — the <b>angry</b> branch is guarded by "NOT smokey". So the mixin
+     * must widen {@code isSmokeyPos}'s own return value toward the angry branch <em>not</em> being
+     * taken: {@code return smokey || husbandry.countsAsShelteredHiveHarvest();}. Getting this
+     * backwards — gating on {@code !isSmokeyPos} the way the Fabric expression's shape suggests —
+     * would anger bees on a <em>sheltered</em> harvest and do nothing on an unsheltered one.
+     */
+    public static boolean hiveHarvestLeavesBeesCalm(Player player) {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return false;
+        }
+        final HusbandryManager husbandry = husbandryOf(serverPlayer);
+        return husbandry != null && husbandry.countsAsShelteredHiveHarvest();
+    }
+
+    /**
+     * A hive is about to wear the shears that robbed it: let {@code Bountiful Harvest} spare them.
+     *
+     * <p>Called from {@code BeehiveBlockUseItemOnMixin}. The gate is the tool's own holder, which
+     * vanilla hands to the {@code hurtAndBreak} call — no interaction stash needed, because a
+     * dispenser harvesting a hive never reaches {@code useItemOn} at all.
+     *
+     * @param holder       whoever is holding the shears
+     * @param damageAmount the durability vanilla was about to take
+     * @return {@code damageAmount}, or {@code 0} on a successful save
+     */
+    public static int onHiveToolDamaged(Player holder, int damageAmount) {
+        if (damageAmount <= 0 || !(holder instanceof ServerPlayer serverPlayer)) {
+            return damageAmount;
+        }
+        final HusbandryManager husbandry = husbandryOf(serverPlayer);
+        if (husbandry == null) {
+            return damageAmount;
+        }
+        return husbandry.rollToolDurabilitySave() ? 0 : damageAmount;
+    }
+
+    // --- Milk and Brush -----------------------------------------------------------------------------
+
+    /**
+     * A player milked a cow or a goat, or bowled a mooshroom's stew: pay the milk verb.
+     *
+     * <p>Called from {@code CowGoatMilkMixin} — which targets {@code Cow} <b>and</b> {@code Goat},
+     * since a goat re-implements the bucket branch inline rather than inheriting it — and from
+     * {@code MushroomCowStewMixin}. Every route is the same verb and shares this one body and one
+     * cooldown, so a mooshroom cannot be milked and stewed for two awards in the same breath, and a
+     * newly added target inherits the gate rather than needing it wired again.
+     *
+     * <p><b>Vanilla rate-limits this verb by nothing at all</b> — right-clicking the same cow with a
+     * bucket is free and repeatable as fast as a player can click — so it is the D-H5 cooldown, not
+     * any game mechanic, that bounds it. Unlike the shear and hive verbs there is no interaction
+     * stash to check: {@code mobInteract} takes the {@link Player} directly and no dispenser reaches
+     * it, so the real-player gate is the signature.
+     *
+     * @param animal the cow, goat or mooshroom
+     * @param player the milker
+     */
+    public static void onMilked(Entity animal, Player player) {
+        if (animal == null || !(player instanceof ServerPlayer serverPlayer)) {
+            return;
+        }
+        final HusbandryManager husbandry = husbandryOf(serverPlayer);
+        if (husbandry == null || !harvestCooldownElapsed(husbandry, animal)) {
+            return;
+        }
+        husbandry.onMilk();
+        rollHiddenBounty(husbandry, serverPlayer, HIDDEN_BOUNTY_MILK);
+    }
+
+    /**
+     * A player brushed an armadillo and a scute was actually delivered: pay the brush verb, and let
+     * {@code Bountiful Harvest} deliver a second one.
+     *
+     * <h2>⚠️ Why this pays on the drop and the shear verb pays on the attempt</h2>
+     * Shearing is gated upstream by {@code isShearable()} — a sheep with no wool cannot be sheared
+     * at all — so by the time the shear seam is reached, a harvest has definitely happened.
+     * <b>Brushing has no such gate</b> beyond age: {@code brushOffScute} refuses a baby and
+     * succeeds for any adult, and vanilla's own passive-shed cooldown is never read or reset on
+     * this path (design spec §8). So the caller hands us {@code brushOffScute}'s own result and
+     * this pays only on a real delivery.
+     *
+     * <h2>🔑 The real-player gate is the call site, not the signature</h2>
+     * {@code Armadillo#mobInteract} is only ever reached by a player; vanilla's own
+     * armadillo-brushing behaviour does not go through it. That is a stricter gate, not a weaker
+     * one — but it is a different reason, and it lives at the call site (the mixin only applies to
+     * {@code mobInteract}, never to {@code brushOffScute} itself).
+     *
+     * @param armadillo the animal being brushed
+     * @param brusher   whoever is brushing
+     * @param brushed   whether vanilla's own {@code brushOffScute} actually handed over a scute
+     * @return {@code true} if {@code Bountiful Harvest} won and a second scute is owed
+     */
+    public static boolean onBrushed(Entity armadillo, Entity brusher, boolean brushed) {
+        // 🔑 The "a scute really changed hands" gate lives HERE rather than in the mixin, so that a
+        // test can reach it. It is the whole basis of this verb -- brushing has no upstream gate the
+        // way isShearable() gates shearing -- and a guard the caller owns is a guard nothing proves.
+        if (!brushed) {
+            return false;
+        }
+        if (armadillo == null || !(brusher instanceof ServerPlayer player)) {
+            return false;
+        }
+        final HusbandryManager husbandry = husbandryOf(player);
+        if (husbandry == null) {
+            return false;
+        }
+        // The cooldown gates the reward, never the drop: a brush inside the window still yields its
+        // scute, it simply does not pay again. Refusing vanilla's own loot would be a mod quietly
+        // breaking the game to enforce its own balance.
+        if (!harvestCooldownElapsed(husbandry, armadillo)) {
+            return false;
+        }
+        husbandry.onBrush();
+        rollHiddenBounty(husbandry, player, HIDDEN_BOUNTY_BRUSH);
+        return husbandry.rollBonusHarvestDrop();
+    }
+
+    /**
+     * A brush is about to take {@code damageAmount} durability: let {@code Bountiful Harvest} spare
+     * it.
+     *
+     * <p>Called from {@code ArmadilloBrushMixin}. The shear verb's durability save has an exact
+     * sibling here for the same reason it had to name a species there — vanilla wears the tool back
+     * in {@code mobInteract}, after {@code brushOffScute} has returned. It is worth 16 durability a
+     * brush, against a brush's total of 64, so this is a much larger effect than the shear save.
+     *
+     * @param armadillo    the animal being brushed
+     * @param damageAmount the durability vanilla was about to take
+     * @return {@code damageAmount}, or {@code 0} on a successful save
+     */
+    public static int onBrushToolDamaged(Entity armadillo, int damageAmount) {
+        if (armadillo == null || damageAmount <= 0) {
+            return damageAmount;
+        }
+        final HusbandryManager husbandry = husbandryOfInteractionWith(armadillo);
+        if (husbandry == null) {
+            return damageAmount;
+        }
+        return husbandry.rollToolDurabilitySave() ? 0 : damageAmount;
+    }
+
+    // --- Hidden Bounty and the D-H5 harvest cooldown -------------------------------------------------
+
+    /**
+     * The world tick at which one animal last paid a Husbandry harvest award.
+     *
+     * <p>Transient on purpose, and that is the whole reason it is a {@link MetadataStore} entry
+     * rather than a persistent attachment the way {@link McMMOAttachments#BRED_BY} had to become:
+     * this is a five-minute window, so losing it when the world closes costs a player one early
+     * payout and nothing else. The bred-by marker had to persist because <em>twenty minutes of
+     * growth</em> would otherwise hinge invisibly on whether you quit in between; five minutes of
+     * cooldown does not have that problem.
+     */
+    private static final String HARVEST_COOLDOWN_KEY = "mcMMO_husbandryHarvestTick";
+
+    /**
+     * {@code Hidden Bounty}: roll for a rare find on a harvest, and hand it over.
+     *
+     * <p>One body shared by all four harvest verbs. The verb arrives as the {@code treasures.yml}
+     * {@code Drops_From} group name, which is what lets the table be keyed on the <em>act</em>
+     * rather than on the species: keying on the animal would need a row per mob and would rot the
+     * first time a version added one.
+     *
+     * <p>The selection itself is MC-free and lives in the manager, taking both random draws as
+     * arguments; this method owns only the config read and the item spawn. Same split as Hylian
+     * Luck's and Fishing's treasure rolls.
+     *
+     * @param husbandry the harvester's manager
+     * @param player    the harvester, who the find is given to
+     * @param verb      {@link #HIDDEN_BOUNTY_SHEAR}, {@link #HIDDEN_BOUNTY_HIVE},
+     *                  {@link #HIDDEN_BOUNTY_MILK} or {@link #HIDDEN_BOUNTY_BRUSH}
+     */
+    private static void rollHiddenBounty(HusbandryManager husbandry, ServerPlayer player,
+            String verb) {
+        final TreasureConfig treasures = McMMOMod.getTreasureConfig();
+        final McMMOPlayer mmoPlayer = UserManager.getPlayer(player.getUUID());
+        if (treasures == null || mmoPlayer == null) {
+            return; // Not loaded (early boot, or a unit test with no config bound).
+        }
+        final List<HusbandryTreasure> candidates = treasures.getHusbandryTreasures(verb);
+        if (candidates.isEmpty()) {
+            return;
+        }
+        final Optional<HusbandryTreasure> won = husbandry.selectHiddenBounty(candidates,
+                husbandry.rollHiddenBounty(),
+                chance -> ProbabilityUtil.isStaticSkillRNGSuccessful(PrimarySkillType.HUSBANDRY,
+                        mmoPlayer, chance));
+        if (won.isEmpty()) {
+            return;
+        }
+
+        final HusbandryTreasure treasure = won.get();
+        final Optional<ItemStack> built = ItemSpecBuilder.build(treasure.getDrop());
+        if (built.isEmpty()) {
+            // The treasure names a material with no vanilla item (already logged by Materials).
+            // Deliberately silent beyond that: announcing a find nobody received would be worse.
+            return;
+        }
+        giveOrDrop(player, built.get());
+        husbandry.onHiddenBountyFound(treasure.getXp());
+        NotificationManager.sendPlayerInformation(mmoPlayer, NotificationType.SUBSKILL_MESSAGE,
+                "Husbandry.SubSkill.HiddenBounty.Proc");
+    }
+
+    /**
+     * Whether {@code animal} is off its Husbandry harvest cooldown, consuming the window if it is.
+     *
+     * <p>Measured in <b>world ticks, not wall-clock milliseconds</b>, which is the right clock for a
+     * singleplayer game: a cooldown counted in real time would keep draining while the world is
+     * paused in the menu, so a player could stand at a cow, open the pause menu for five minutes and
+     * come back to a fresh payout. It also makes the arithmetic testable without a fake clock.
+     *
+     * <p>A negative elapsed time counts as elapsed. The world's clock can legitimately move
+     * backwards ({@code /time set}, or an animal led into a dimension keeping its own count), and
+     * the failure mode of ignoring that is the worst one available — the animal would be locked out
+     * of paying anything ever again, silently.
+     */
+    private static boolean harvestCooldownElapsed(HusbandryManager husbandry, Entity animal) {
+        // Herdsman's Call's cooldown-bypass half. Placed here rather than at the two call sites so
+        // it cannot be wired into milking and forgotten for brushing, and it deliberately does NOT
+        // stamp the animal's timestamp: a bypassed harvest leaves the ordinary cooldown exactly
+        // where it was, so blowing the horn over a herd cannot also reset every animal's clock and
+        // hand the player a second full round the moment the ability ends.
+        if (husbandry.isHerdsmansCallActive()) {
+            return true;
+        }
+        final int seconds = husbandry.getHarvestCooldownSeconds();
+        if (seconds <= 0) {
+            return true; // Gate configured off.
+        }
+        final long now = animal.level().getGameTime();
+        final Long lastAward = MetadataStore.get(animal, HARVEST_COOLDOWN_KEY, Long.class);
+        if (lastAward != null) {
+            final long elapsed = now - lastAward;
+            if (elapsed >= 0 && elapsed < (long) seconds * Misc.TICK_CONVERSION_FACTOR) {
+                return false;
+            }
+        }
+        MetadataStore.set(animal, HARVEST_COOLDOWN_KEY, now);
+        return true;
     }
 
     /**
