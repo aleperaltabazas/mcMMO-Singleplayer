@@ -6,7 +6,10 @@
   "mixins": [
     "AbstractFurnaceGetBurnDurationMixin",
     "AbstractFurnaceSmeltMixin",
+    "AgeableMobGrowthMixin",
+    "AnimalSetInLoveMixin",
     "BlockPlaceMixin",
+    "BredAnimalsTriggerMixin",
     "BrewingStandBrewTimeAccessor",
     "BrewingStandTickMixin",
     "CampfireCookMixin",
