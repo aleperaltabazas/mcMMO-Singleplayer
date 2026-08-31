@@ -19,6 +19,7 @@ import com.gmail.nossr50.neoforge.listeners.AlchemyListener;
 import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
 import com.gmail.nossr50.neoforge.listeners.CookingListener;
 import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
+import com.gmail.nossr50.neoforge.listeners.HerdsmansCallListener;
 import com.gmail.nossr50.neoforge.listeners.HunterListener;
 import com.gmail.nossr50.neoforge.listeners.HusbandryListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
@@ -245,6 +246,12 @@ public final class McMMOMod {
         // Cooking's own two seams: crafting-grid XP and campfire owner tracking/XP/Master Chef
         // (docs/superpowers/sdd/2026-08-30-cooking-smelting-listener-plan, Task C).
         CookingListener.register();
+
+        // Husbandry listener plan, final-review fix (Finding 1): Herdsman's Call's activation
+        // trigger. Without this, setAbilityMode(HERDSMANS_CALL, true) is never called in production
+        // and the super ability -- despite all three of its effects being wired elsewhere -- can
+        // never actually turn on.
+        HerdsmansCallListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
