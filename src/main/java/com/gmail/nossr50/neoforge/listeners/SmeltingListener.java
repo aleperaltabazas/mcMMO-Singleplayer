@@ -246,6 +246,17 @@ public final class SmeltingListener {
      * the other way round would leave the XP and the fuel bonus disagreeing about which skill owns
      * a given input.
      *
+     * <p><b>Unlike {@link #boostFuelTime}, this is a genuine blanket {@code else} with no
+     * {@code isCookable} gate — deliberately, not an oversight.</b> {@link CookingManager#award}
+     * (called inside {@code onCook} below) already returns a no-op ({@code CookAward.NOTHING}) for
+     * an unpriced item: no XP, no rate-cap budget spent, no {@code capReached} flag. An XP award
+     * naturally no-ops on an item neither table prices, so a non-smeltable, non-cookable input
+     * (sand, cobblestone, a log) simply earns nothing here. {@link #boostFuelTime}'s fuel
+     * <em>multiplier</em> has no such natural no-op — multiplying vanilla's burn time by Kitchen
+     * Efficiency's factor is an observable effect regardless of what is in the input slot — which is
+     * exactly why that method needs its explicit {@code isCookable} gate and this one does not. Do
+     * not "fix" either method to match the other's shape.
+     *
      * @param world the furnace's world — its time is the clock Cooking's rate cap is measured on
      * @param pos   the furnace position
      * @param input the item that was smelted (the input slot's stack, read before it is consumed)
@@ -409,6 +420,12 @@ public final class SmeltingListener {
      * @param extracted the stack being taken out of the output slot
      */
     public static void beginFurnaceExtract(Player player, ItemStack extracted) {
+        // Defensively cleared first, unconditionally, before any early-return check below — the
+        // same get-then-remove idiom as EntityDamageListener#consumePreArmorDamage. The paired
+        // FurnaceResultSlotMixin RETURN injector normally clears this, but @At("RETURN") does not
+        // fire if awardUsedRecipesAndPopExperience throws, and a stale value would otherwise leak
+        // into the next extraction on this thread, including an unranked player's.
+        VANILLA_XP_MULTIPLIER.remove();
         if (!(player instanceof ServerPlayer) || extracted.isEmpty()) {
             return; // client-side copy of the screen handler, or nothing actually taken.
         }

@@ -144,6 +144,16 @@ class SmeltingManagerTest {
     }
 
     @Test
+    void isSmeltableIsNullSafeWhenTheExperienceConfigIsUnloaded() {
+        // ConfigBootstrap.unload() nulls the experience config at server stop; SmeltingListener's
+        // boostFuelTime now calls isSmeltable before resolving the furnace owner, so this null
+        // window is reachable where the old owner-first order never was. Fails closed.
+        McMMOMod.setExperienceConfig(null);
+        assertFalse(SmeltingManager.isSmeltable("Iron_Ore"),
+                "no config loaded → not smeltable, not an NPE");
+    }
+
+    @Test
     void hasRoomForSecondSmeltMatchesTheLegacyStackBound() {
         // Legacy tested the PRE-merge count against maxStackSize - 2; our seam is post-merge, where
         // the count is one higher, so the same test is "count < maxCount".

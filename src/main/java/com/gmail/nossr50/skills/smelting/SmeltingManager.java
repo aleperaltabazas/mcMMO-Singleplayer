@@ -1,6 +1,7 @@
 package com.gmail.nossr50.skills.smelting;
 
 import com.gmail.nossr50.config.GeneralConfig;
+import com.gmail.nossr50.config.experience.ExperienceConfig;
 import com.gmail.nossr50.datatypes.experience.XPGainReason;
 import com.gmail.nossr50.datatypes.experience.XPGainSource;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
@@ -61,7 +62,13 @@ public class SmeltingManager extends SkillManager {
      * @param materialConfigString the config string of the furnace's <em>input</em> material
      */
     public static boolean isSmeltable(@NotNull String materialConfigString) {
-        return McMMOMod.getExperienceConfig().getSmeltingXP(materialConfigString) >= 1;
+        // Null-safe like isSecondSmeltMaterial and CookingManager.isCookable: SmeltingListener's
+        // boostFuelTime now calls this membership test before resolving the furnace's owner, so a
+        // null-config window (ConfigBootstrap.unload() nulls experienceConfig at server stop) can
+        // reach here where the old owner-first order never could. Fails closed: no config, not
+        // smeltable.
+        final ExperienceConfig experience = McMMOMod.getExperienceConfig();
+        return experience != null && experience.getSmeltingXP(materialConfigString) >= 1;
     }
 
     public boolean isSecondSmeltSuccessful() {
