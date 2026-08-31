@@ -4,6 +4,7 @@ import com.gmail.nossr50.neoforge.listeners.HusbandryListener;
 import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.AgeableMob;
+import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.entity.animal.horse.AbstractHorse;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -65,16 +66,31 @@ public abstract class AbstractHorseChildAttributesMixin {
      * <p>{@code this} is one of the two parents, which is all that is needed — {@code getLoveCause}
      * is set on whichever animal the player fed, and vanilla only reaches breeding when at least one
      * parent has one.
+     *
+     * <p><b>Parameter order gotcha, confirmed by {@code javap} on {@code Horse#getBreedOffspring}:</b>
+     * the real call site is {@code this.setOffspringAttributes(partnerAnimal, newFoal)} — so
+     * {@code setOffspringAttributes}'s <em>first</em> formal parameter ({@code AgeableMob}) is the
+     * true other breeding parent, and its <em>second</em> ({@code AbstractHorse}) is the
+     * brand-new child just being constructed, which never has a love cause because it doesn't exist
+     * yet when love mode was set. Bind the handler's parameters in that order — {@code mate} first,
+     * {@code child} second — and forward {@code mate}, not {@code child}, to
+     * {@link HusbandryListener#beginSelectiveBreeding}; swapping them silently breaks the "fall back
+     * to the mate" branch without any load-time or compile-time signal.
+     *
+     * <p>{@code mate} is declared {@code AgeableMob} because that is
+     * {@code setOffspringAttributes}' own real parameter type, but every breeding partner vanilla
+     * can actually pass here is an {@link Animal} (horses only breed with other {@code Animal}s) —
+     * the cast below is safe for the same reason {@code (AbstractHorse) (Object) this} already was.
      */
     @Inject(method = SET_OFFSPRING_ATTRIBUTES, allow = 1, at = @At("HEAD"))
-    private void mcmmo$beginSelectiveBreeding(AgeableMob child, AbstractHorse mate,
+    private void mcmmo$beginSelectiveBreeding(AgeableMob mate, AbstractHorse child,
             CallbackInfo ci) {
-        HusbandryListener.beginSelectiveBreeding((AbstractHorse) (Object) this, mate);
+        HusbandryListener.beginSelectiveBreeding((AbstractHorse) (Object) this, (Animal) mate);
     }
 
     /** Close the stash on every exit, so it cannot outlive the breeding that opened it. */
     @Inject(method = SET_OFFSPRING_ATTRIBUTES, allow = 1, at = @At("RETURN"))
-    private void mcmmo$endSelectiveBreeding(AgeableMob child, AbstractHorse mate, CallbackInfo ci) {
+    private void mcmmo$endSelectiveBreeding(AgeableMob mate, AbstractHorse child, CallbackInfo ci) {
         HusbandryListener.endSelectiveBreeding();
     }
 
