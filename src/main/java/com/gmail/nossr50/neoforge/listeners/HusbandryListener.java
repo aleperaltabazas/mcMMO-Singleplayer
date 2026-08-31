@@ -55,6 +55,15 @@ import org.jetbrains.annotations.Nullable;
  * {@link #giveOrDrop}). No verb (breed/raise/shear/hive/milk/brush/selective-breeding/brood/hidden
  * bounty) is wired yet — those land in Tasks B/C/D, each adding its own methods below without
  * needing to touch anything in this task.
+ *
+ * <p><b>PORT (NeoForge, Task D):</b> this task lands the last two verbs, Selective Breeding and
+ * Brood, and is the final task adding to this file's harvest/breeding section (Task E wires a call
+ * from {@code PlayerMovementTracker} instead). Both are the same one-hook-on-a-return-value shape
+ * as the rest of this class's stashes: Selective Breeding stashes the breeder around
+ * {@code AbstractHorse#setOffspringAttributes} and biases {@code createOffspringAttribute}'s return
+ * value; Brood layers two extra-chance rolls on top of {@code ThrownEgg#onHit}'s own two dice. See
+ * {@code neoforge.mixin.AbstractHorseChildAttributesMixin} / {@code neoforge.mixin.ThrownEggHatchMixin}
+ * for the seams.
  */
 public final class HusbandryListener {
 
@@ -931,6 +940,159 @@ public final class HusbandryListener {
         }
         MetadataStore.set(animal, HARVEST_COOLDOWN_KEY, now);
         return true;
+    }
+
+    // =============================================================================================
+    // Task D: Selective Breeding + Brood — beginSelectiveBreeding/endSelectiveBreeding/
+    // applySelectiveBreedingBias (foal stat bias) and onEggHatchRoll/onFullClutchRoll (hatched
+    // chicks, sometimes four at once). Ports the Fabric original's stage 5 sections onto the
+    // Mojang-mapped 1.21.1 names — see neoforge.mixin.AbstractHorseChildAttributesMixin /
+    // ThrownEggHatchMixin for the seams these methods are called from.
+    // =============================================================================================
+
+    /**
+     * The Selective Breeding bias in force for the breeding currently being resolved, or
+     * {@code null} outside one.
+     *
+     * <p><b>This exists because vanilla's inheritance roll is {@code static} and holds no
+     * player.</b> {@code AbstractHorse#createOffspringAttribute} is where a foal's health, speed and
+     * jump strength are actually decided, and it takes five numbers and a {@code RandomSource} —
+     * there is nobody in it to ask. So the bias is computed once, at the one point on the path that
+     * <em>is</em> an instance method on a parent, and read back inside the static call.
+     *
+     * <p>Same {@link ThreadLocal} HEAD/RETURN shape as {@link #PLAYER_INTERACTION} and
+     * {@link #SPREADING_LOVE}, and for the same reason: the whole window is one synchronous call on
+     * the server thread.
+     *
+     * <p>It holds the breeder's <b>manager</b> rather than a pre-computed bias so that the biasing
+     * arithmetic lives in exactly one place — {@link HusbandryManager#applyStatBias} — where it is
+     * MC-free and unit-tested. Two copies of a balance formula is how the two halves drift apart, and
+     * re-reading the config three times per breeding (once per inherited attribute) costs nothing.
+     */
+    private static final ThreadLocal<HusbandryManager> SELECTIVE_BREEDING = new ThreadLocal<>();
+
+    /**
+     * A horse-family pair is about to roll their foal's stats: work out whose Selective Breeding
+     * applies.
+     *
+     * <p>Called from {@code AbstractHorseChildAttributesMixin}. Either parent will do — vanilla sets
+     * the loving player ({@code Animal#getLoveCause}) on whichever animal was fed, and it only
+     * reaches breeding when at least one has one. Resolving the bias here rather than in the static
+     * call is the whole point of the stash.
+     *
+     * @param parent one parent, whose {@code setOffspringAttributes} is the call this stash brackets
+     * @param mate   the other parent
+     */
+    public static void beginSelectiveBreeding(Animal parent, Animal mate) {
+        final HusbandryManager husbandry = husbandryOfBreeder(parent, mate);
+        if (husbandry == null) {
+            return; // AI-driven or command-driven breeding: nobody's sub-skill applies.
+        }
+        SELECTIVE_BREEDING.set(husbandry);
+    }
+
+    /** The breeding has finished rolling its stats. Called from the mixin's {@code RETURN} injector. */
+    public static void endSelectiveBreeding() {
+        SELECTIVE_BREEDING.remove();
+    }
+
+    /**
+     * Apply the stashed bias to one rolled offspring stat.
+     *
+     * <p>Called from {@code AbstractHorseChildAttributesMixin}, three times per breeding — once per
+     * attribute {@code AbstractHorse#setOffspringAttribute} inherits. Returns {@code rolled}
+     * untouched when no breeding is in flight, which is the common case by a wide margin: this same
+     * static method runs for every horse bred anywhere in the world, including with no player
+     * involved.
+     */
+    public static double applySelectiveBreedingBias(double rolled, double min, double max) {
+        final HusbandryManager husbandry = SELECTIVE_BREEDING.get();
+        return husbandry == null ? rolled : husbandry.applyStatBias(rolled, min, max);
+    }
+
+    /**
+     * The Husbandry manager of whichever parent vanilla credits with the breeding, or {@code null}.
+     *
+     * <p><b>No Fox/Turtle-style per-species bypass applies here</b> — unlike the breed-XP seam
+     * {@link #onAnimalsBred} reaches through {@code BredAnimalsTrigger#trigger} (which foxes and
+     * turtles skip entirely by re-implementing their own breeding sequence),
+     * {@code setOffspringAttributes} is declared exactly once, on {@code AbstractHorse}, and nothing
+     * in the horse family overrides it (confirmed: no subclass in this jar declares its own
+     * {@code setOffspringAttributes}). Every horse-family breeding — horse, donkey, mule, zombie
+     * horse, skeleton horse — reaches this same method, so there is no enumeration gap the way the
+     * breed-XP funnel had one. Positively confirmed by
+     * {@code HusbandryListenerSelectiveBreedingTest}, not assumed by analogy.
+     */
+    private static @Nullable HusbandryManager husbandryOfBreeder(Animal parent, Animal mate) {
+        for (Animal candidate : new Animal[] {parent, mate}) {
+            if (candidate == null) {
+                continue;
+            }
+            final ServerPlayer breeder = candidate.getLoveCause();
+            if (breeder != null) {
+                final HusbandryManager husbandry = husbandryOf(breeder);
+                if (husbandry != null) {
+                    return husbandry;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * {@code Brood}: rescue a thrown egg vanilla was about to waste.
+     *
+     * <p>Called from {@code ThrownEggHatchMixin}. Returning {@code 0} makes vanilla take its own
+     * hatch branch, so Brood's chance <em>adds to</em> the vanilla 1-in-8 rather than replacing it.
+     *
+     * @param egg  the thrown egg, whose owner is the thrower
+     * @param roll vanilla's own {@code nextInt(8)}; {@code 0} already means "hatch"
+     * @return {@code roll}, or {@code 0} to force a hatch
+     */
+    public static int onEggHatchRoll(Entity egg, int roll) {
+        if (roll == 0) {
+            return roll; // Vanilla is already hatching it; nothing to add.
+        }
+        final HusbandryManager husbandry = husbandryOfThrower(egg);
+        return husbandry != null && husbandry.rollEggHatch() ? 0 : roll;
+    }
+
+    /**
+     * {@code Brood}: turn a hatch into vanilla's rare full clutch.
+     *
+     * <p>Called from {@code ThrownEggHatchMixin}. <b>The hatched chick carries no {@code BRED_BY}
+     * marker</b> either way — nothing on this path, or on {@code ThrownEgg#onHit} itself, ever calls
+     * {@code setData(McMMOAttachments.BRED_BY, ...)} on the spawned {@code Chicken}. Brood pays no
+     * XP and marks no chick, deliberately: a hopper under a coop is fully AFK income (laying is a
+     * passive timer), so marking the hatched chick would have quietly turned that same AFK egg farm
+     * into a raise-XP farm twenty minutes later. Both properties are pinned by
+     * {@code HusbandryListenerBroodTest}.
+     *
+     * @param egg  the thrown egg
+     * @param roll vanilla's own {@code nextInt(32)}; {@code 0} already means "four chicks"
+     * @return {@code roll}, or {@code 0} to force a full clutch
+     */
+    public static int onFullClutchRoll(Entity egg, int roll) {
+        if (roll == 0) {
+            return roll;
+        }
+        final HusbandryManager husbandry = husbandryOfThrower(egg);
+        return husbandry != null && husbandry.rollMultipleChicks() ? 0 : roll;
+    }
+
+    /**
+     * The Husbandry manager of whoever threw a projectile, or {@code null}.
+     *
+     * <p>The owner check is also the dispenser gate: eggs are dispensable in vanilla, and a dispensed
+     * egg has no player owner. {@code Projectile#getOwner()} is confirmed present in this jar (see
+     * {@code ThrownEggHatchMixin}'s own javadoc for the {@code javap} check) — the spec's one
+     * flagged-unverified item for this seam.
+     */
+    private static @Nullable HusbandryManager husbandryOfThrower(Entity projectile) {
+        if (!(projectile instanceof net.minecraft.world.entity.projectile.Projectile thrown)) {
+            return null;
+        }
+        return thrown.getOwner() instanceof ServerPlayer thrower ? husbandryOf(thrower) : null;
     }
 
     /**

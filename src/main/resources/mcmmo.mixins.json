@@ -6,6 +6,7 @@
   "mixins": [
     "AbstractFurnaceGetBurnDurationMixin",
     "AbstractFurnaceSmeltMixin",
+    "AbstractHorseChildAttributesMixin",
     "AgeableMobGrowthMixin",
     "AnimalSetInLoveMixin",
     "ArmadilloBrushMixin",
@@ -27,6 +28,7 @@
     "PlayerInteractionStashMixin",
     "ResultSlotMixin",
     "ShearsItemInteractMixin",
+    "ThrownEggHatchMixin",
     "TntExplodeMixin"
   ],
   "injectors": {
