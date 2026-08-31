@@ -17,6 +17,7 @@
     "HoeTillingActionsAccessor",
     "LivingEntityDamageMixin",
     "LivingEntityDropFromLootTableAccessor",
+    "PlayerInteractionStashMixin",
     "ResultSlotMixin",
     "TntExplodeMixin"
   ],

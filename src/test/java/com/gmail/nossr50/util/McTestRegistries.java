@@ -16,6 +16,7 @@ import net.minecraft.world.item.Item;
 import net.neoforged.fml.loading.LoadingModList;
 import net.neoforged.neoforge.common.BooleanAttribute;
 import net.neoforged.neoforge.common.PercentageAttribute;
+import net.neoforged.neoforge.registries.NeoForgeRegistries;
 
 /**
  * Shared one-time Minecraft bootstrap for unit tests that touch live vanilla registries (item/block
@@ -90,7 +91,55 @@ public final class McTestRegistries {
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
         registerMissingNeoForgeAttributes();
+        registerAttachmentTypesRootRegistry();
         bootstrapped = true;
+    }
+
+    /**
+     * Husbandry listener plan, Task A: registers {@code NeoForgeRegistries.ATTACHMENT_TYPES} (and
+     * every other {@code neoforge:*} registry -- see below) into {@code BuiltInRegistries.REGISTRY}
+     * (the registry-of-registries), the one step of a real mod-loading session this headless test
+     * JVM otherwise never runs.
+     *
+     * <p><b>Why this is needed at all:</b> {@code NeoForgeRegistries.ATTACHMENT_TYPES} is a plain
+     * {@code static final} field ({@code new RegistryBuilder<>(Keys.ATTACHMENT_TYPES).create()}),
+     * built the moment the class loads -- but building the {@code Registry<AttachmentType<?>>}
+     * object is not the same as it being <em>findable</em>. {@code DeferredHolder#getRegistry()}
+     * (the method every {@code DeferredRegister} entry resolves through, including
+     * {@code McMMOAttachments.BRED_BY}) looks the registry up by key via
+     * {@code BuiltInRegistries.REGISTRY.get(key.registry())} -- and in a real game session, that
+     * entry is only added by {@code NewRegistryEvent.fill()}, fired from
+     * {@code NeoForgeRegistriesSetup#registerRegistries} during FML's mod-construction lifecycle
+     * (verified by reading both classes' real 1.21.1 source). Without this, every
+     * {@code DeferredHolder<AttachmentType<?>, ?>.get()} throws {@code IllegalStateException:
+     * Registry not present for ... neoforge:attachment_types} the first time any test resolves one
+     * -- confirmed the hard way while building {@code McMMOAttachmentsBredByTest}.
+     *
+     * <p>Mirrors {@code NewRegistryEvent.fill()}'s own unfreeze/register/re-freeze shape exactly
+     * (same {@code RegistrationInfo.BUILT_IN}, same duplicate-registration guard) rather than
+     * reinventing it, and registers every {@code NeoForgeRegistries} field the same way that method
+     * does for parity -- a future test exercising a different {@code neoforge:*} registry
+     * (ingredient types, condition serializers, etc.) hits the identical gap this one just did, and
+     * should not have to re-derive the same fix.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void registerAttachmentTypesRootRegistry() {
+        final MappedRegistry root = (MappedRegistry) BuiltInRegistries.REGISTRY;
+        root.unfreeze();
+        try {
+            registerRegistryIfMissing(root, NeoForgeRegistries.ATTACHMENT_TYPES);
+        } finally {
+            root.freeze();
+        }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void registerRegistryIfMissing(MappedRegistry root, Registry<?> registry) {
+        final ResourceLocation id = registry.key().location();
+        if (root.containsKey(id)) {
+            return;
+        }
+        Registry.register((Registry) root, (net.minecraft.resources.ResourceKey) registry.key(), registry);
     }
 
     /** See the class javadoc's "neoforge:* attribute" section for why this exists and its ordering. */

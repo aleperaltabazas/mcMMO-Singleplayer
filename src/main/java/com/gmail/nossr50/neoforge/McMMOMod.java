@@ -20,6 +20,7 @@ import com.gmail.nossr50.neoforge.listeners.BlockBreakListener;
 import com.gmail.nossr50.neoforge.listeners.CookingListener;
 import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
 import com.gmail.nossr50.neoforge.listeners.HunterListener;
+import com.gmail.nossr50.neoforge.listeners.HusbandryListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.RepairSalvageListener;
@@ -182,12 +183,16 @@ public final class McMMOMod {
     private static volatile SalvageableManager salvageableManager;
     private static volatile CallOfTheWild callOfTheWild;
 
-    // Both constructor-injected parameters below are currently unused: nothing in this mod has
-    // needed to register on the mod bus (modEventBus) or read mod metadata (modContainer) yet.
-    // Kept as parameters because NeoForge's @Mod constructor-injection requires this signature
-    // shape to be satisfied to receive either one, should a later task need them.
+    // modContainer is currently unused: nothing in this mod has needed to read mod metadata yet.
+    // Kept as a parameter because NeoForge's @Mod constructor-injection requires this signature
+    // shape to be satisfied to receive it, should a later task need it.
     public McMMOMod(IEventBus modEventBus, ModContainer modContainer) {
         LOGGER.info("mcMMO (NeoForge) initializing.");
+
+        // Husbandry listener plan, Task A: this codebase's first DeferredRegister. BRED_BY (and
+        // any future attachment types) must be registered on the MOD bus, not the game bus --
+        // standard NeoForge DeferredRegister shape.
+        McMMOAttachments.register(modEventBus);
 
         // Register lifecycle hooks once at mod load, on the GAME bus: ServerStartingEvent /
         // ServerStoppingEvent / ServerTickEvent.Post are not IModBusEvent subtypes and are posted
@@ -361,6 +366,9 @@ public final class McMMOMod {
             SmeltingListener.clearOwners();
             // K7 Cooking: drop the campfire owner map for the same reason.
             CookingListener.clearOwners();
+            // Husbandry listener plan, Task A: belt-and-braces drop of the in-flight
+            // player-interaction stash for the same reason -- see HusbandryListener#clear.
+            HusbandryListener.clear();
             // §A/K9: write this world's hand-placed-block flags back to its save, THEN drop them —
             // the order matters, since clearing first would persist an empty set and hand the
             // place -> mine -> repeat farm back to the player on the next load. The store

@@ -3,7 +3,13 @@ package com.gmail.nossr50.neoforge;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.world.entity.Entity;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.neoforge.attachment.AttachmentType;
+import net.neoforged.neoforge.registries.DeferredRegister;
+import net.neoforged.neoforge.registries.NeoForgeRegistries;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -37,12 +43,60 @@ import org.jetbrains.annotations.Nullable;
  * Until that hook exists, this table has the same unbounded-growth-over-a-session shape
  * {@code MetadataStore} would have if nothing ever called its own {@code clear} either; tracked
  * here rather than silently left unmentioned.
+ *
+ * <p><b>{@code BRED_BY} (Husbandry listener plan, Task A): real, registered persistence — NOT a
+ * stand-in.</b> Unlike {@link #MOB_ORIGIN} above, {@link #BRED_BY} is a genuine NeoForge
+ * {@link AttachmentType}, registered through {@link NeoForgeRegistries.Keys#ATTACHMENT_TYPES} via
+ * {@link #ATTACHMENT_TYPES}, a {@link DeferredRegister} wired onto the mod event bus from
+ * {@code McMMOMod}'s constructor. It marks a newborn animal with the {@link UUID} of the player
+ * whose breeding produced it, persisted into the entity's own NBT via
+ * {@code .serialize(UUIDUtil.CODEC)}, so the marker survives a chunk unload/reload or a world
+ * save/restart the way {@link #MOB_ORIGIN} currently does not (see that field's own javadoc for
+ * the gap this does not fix).
+ *
+ * <p><b>Always read/write {@link #BRED_BY} through {@code hasData}/{@code getExistingDataOrNull}/
+ * {@code setData}/{@code removeData} — never plain {@code getData(type)}.</b> {@code getData}
+ * materializes and stores the type's default value (here, {@code null}) on first read and syncs
+ * it to clients, silently turning "no marker" into "a stored null-ish default" and defeating the
+ * point of an absence check. {@code BRED_BY} carries no {@code copyOnDeath()}: a breeding-age
+ * crossing consumes and removes the marker (Task B) before an animal could plausibly die carrying
+ * it in a way that matters, the same reasoning the Fabric original used implicitly by never
+ * calling anything death-related for this marker.
  */
 public final class McMMOAttachments {
 
     private static final Map<UUID, String> MOB_ORIGIN = new ConcurrentHashMap<>();
 
+    /**
+     * This codebase's first {@link DeferredRegister} of any kind. Registered onto the mod event
+     * bus from {@code McMMOMod}'s constructor via {@link #register}; every {@link AttachmentType}
+     * this class defines is registered through it.
+     */
+    public static final DeferredRegister<AttachmentType<?>> ATTACHMENT_TYPES =
+            DeferredRegister.create(NeoForgeRegistries.Keys.ATTACHMENT_TYPES, McMMOMod.MOD_ID);
+
+    /**
+     * Real, registered, disk-persisted marker of who bred an animal. See this class's own javadoc
+     * for why this is not built the same way {@link #MOB_ORIGIN} is.
+     *
+     * <p>{@code AttachmentType.builder(...)} wants a default-value {@link Supplier}/{@code
+     * Function<IAttachmentHolder, T>}, not a bare nullable — {@code () -> (UUID) null} supplies
+     * that shape while keeping the type genuinely absence-checked (the default is never a valid
+     * marker; it exists only so the builder compiles, and is never read through {@code getData}).
+     */
+    public static final Supplier<AttachmentType<UUID>> BRED_BY = ATTACHMENT_TYPES.register("bred_by",
+            () -> AttachmentType.builder(() -> (UUID) null).serialize(UUIDUtil.CODEC).build());
+
     private McMMOAttachments() {
+    }
+
+    /**
+     * Register {@link #ATTACHMENT_TYPES} onto the mod event bus. Called once from
+     * {@code McMMOMod}'s constructor, alongside the mod's other one-time mod-bus setup — standard
+     * NeoForge {@link DeferredRegister} registration shape.
+     */
+    public static void register(IEventBus modEventBus) {
+        ATTACHMENT_TYPES.register(modEventBus);
     }
 
     /** Stand-in for {@code entity.getAttached(McMMOAttachments.MOB_ORIGIN)}. */
