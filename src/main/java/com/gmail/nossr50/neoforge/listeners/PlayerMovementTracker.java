@@ -5,22 +5,29 @@ import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformLivingEntity;
 import com.gmail.nossr50.platform.SkillAttributeService;
+import com.gmail.nossr50.skills.husbandry.HusbandryManager;
 import com.gmail.nossr50.skills.movement.MovementManager;
 import com.gmail.nossr50.skills.movement.Medium;
 import com.gmail.nossr50.skills.stealth.StealthManager;
 import com.gmail.nossr50.skills.unarmored.UnarmoredManager;
 import com.gmail.nossr50.util.player.UserManager;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ai.navigation.PathNavigation;
+import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.entity.EntityTypeTest;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -91,14 +98,20 @@ import org.jetbrains.annotations.Nullable;
  * PlayerSessionListener#onQuit} — this keeps the two files decoupled exactly as the two separate Fabric
  * registrations did, and NeoForge allows any number of independent listeners on one event type.
  *
- * <p>Three call sites present in the Fabric original are omitted on this branch (see the omission
+ * <p>Two call sites present in the Fabric original are omitted on this branch (see the omission
  * comments at each former call site below for why): {@code PetFollowTeleport.onPlayerMoved} and
- * {@code PetCombatSweep.tick} (Taming pet following/aggression — not ported), {@code
- * EntityDamageListener.forgetPlayer} in the disconnect handler (Stealth's Assassin combat side-table —
- * {@code EntityDamageListener} not ported), and {@code callTheHerd} (Husbandry's Herdsman's Call —
- * Husbandry out of scope for this port). Because the two pet call sites are gone, {@code LAST_WORLDS}
- * and the {@code sameWorld} computation that fed it — which the Fabric original's own javadoc says only
- * {@code PetFollowTeleport} ever read — are dead weight here and have been dropped.
+ * {@code PetCombatSweep.tick} (Taming pet following/aggression — not ported). Because those two pet
+ * call sites are gone, {@code LAST_WORLDS} and the {@code sameWorld} computation that fed it — which
+ * the Fabric original's own javadoc says only {@code PetFollowTeleport} ever read — are dead weight
+ * here and have been dropped.
+ *
+ * <p><b>Husbandry's Herdsman's Call</b> ({@link #applyHerdsmansCall}) rides this sweep too, ported
+ * from Fabric's {@code callTheHerd} — found, on a full-tree search, inside Fabric's own {@code
+ * listeners/PlayerMovementTracker.java} (not {@code HusbandryListener.java}, where an earlier spec
+ * pass looked and did not find it). Same shape as {@code applyIronSkin}: a per-tick, per-player,
+ * MC-typed effect with no XP of its own, sitting above the Agility-manager-missing guard for the
+ * same "an unrelated skill's buff must not silently depend on Agility's manager having loaded"
+ * reason Iron Skin does.
  */
 public final class PlayerMovementTracker {
 
@@ -266,11 +279,12 @@ public final class PlayerMovementTracker {
         // player's armour depend on an unrelated skill loading, and the failure would be silent.
         applyIronSkin(player, mmoPlayer);
 
-        // OMISSION: the Fabric original also called callTheHerd(player, mmoPlayer) here, ABOVE the
-        // Agility guard for the same "unrelated skill must not depend on Agility's manager loading"
-        // reason Unarmored's Iron Skin does. Husbandry's Herdsman's Call is out of scope for this
-        // port (Husbandry is not ported on this branch), so the method and its call site are both
-        // omitted rather than stubbed.
+        // ⚠️ HERDSMAN'S CALL SITS ABOVE THE AGILITY GUARD TOO, AND FOR THE SAME REASON UNARMORED'S
+        // IRON SKIN DOES. Husbandry's super has nothing to do with Agility; below the return it would
+        // stop working for any player whose Agility manager happened not to be loaded, and it would
+        // fail exactly the way Iron Skin and the Stealth dispatch would have — compiling, booting
+        // clean, and passing every unit test that does not drive tickPlayer itself.
+        applyHerdsmansCall(player, mmoPlayer);
 
         final MovementManager agility = mmoPlayer.getMovementManager();
         if (agility == null) {
@@ -341,6 +355,80 @@ public final class PlayerMovementTracker {
         SkillAttributeService.set(player, SkillAttributeService.Managed.UNARMORED_IRON_SKIN,
                 unarmored.getSkinArmorPoints(PlatformLivingEntity.isUnarmored(player)));
     }
+
+    /**
+     * Husbandry's <b>Herdsman's Call</b>: while the horn is sounding, walk nearby livestock to the
+     * player.
+     *
+     * <p>Rides this sweep because it is the mod's only per-tick per-player hook and following has to
+     * be re-pathed continuously — the player is moving, which is the entire point of the effect.
+     *
+     * <p><b>Vanilla's own navigation, not a velocity write and not a teleport.</b>
+     * {@code getNavigation().moveTo(player, speed)} means fences, walls, water and drops all still
+     * stop an animal, so the ability gathers a herd rather than dragging it through the scenery — and
+     * a player cannot use it to pull animals out of a pen or across a ravine. (It is also the only
+     * option that works: a velocity write on someone else's entity is exactly the shape that failed
+     * for Agility, and teleporting livestock would be a different, much worse ability.)
+     *
+     * <p><b>Costs nothing while the ability is idle.</b> {@link HusbandryManager#getHerdRadius()}
+     * returns {@code 0} unless the call is active, so the common case is one boolean read per player
+     * per tick and no entity sweep at all. That matters: this runs for every online player, every
+     * tick, forever.
+     *
+     * <p>Only animals that are <em>already idle</em> are redirected. Overriding a live navigation
+     * target every tick would fight vanilla's own goals — an animal fleeing a wolf, or one already
+     * walking to its mate — and produce a herd that jitters in place instead of one that comes when
+     * called.
+     *
+     * <p><b>PORT note:</b> this is a faithful 1:1 port of Fabric's {@code callTheHerd} — found, on a
+     * full-tree {@code git grep}, living inside Fabric's own {@code listeners/PlayerMovementTracker}
+     * (not {@code HusbandryListener}, where an earlier spec pass looked and did not find it). Only the
+     * Yarn→Mojang renames changed: {@code AnimalEntity} → {@link Animal}, {@code EntityNavigation} →
+     * {@link PathNavigation}, {@code Box} → {@link AABB}, {@code Box#expand} → {@code AABB#inflate},
+     * {@code navigation.isIdle()} → {@code navigation.isDone()}, {@code
+     * navigation.startMovingTo(Entity, double)} → {@code navigation.moveTo(Entity, double)}, and
+     * {@code world.getEntitiesByClass(Class, Box, Predicate)} →
+     * {@code level.getEntities(EntityTypeTest, AABB, Predicate)} — the same
+     * {@code EntityTypeTest.forClass(...)}-mediated overload {@code HusbandryListener#onLovePlayer}
+     * already uses for its own Multi-Breed sweep (not the {@code getEntitiesOfClass} default method,
+     * which forwards to the same overload anyway but is opaque to a Mockito mock in tests). The
+     * mechanic itself — an idle-only AABB sweep pathing eligible animals to the player at
+     * {@link #HERD_FOLLOW_SPEED} — is unchanged.
+     */
+    private static void applyHerdsmansCall(@NotNull ServerPlayer player,
+            @NotNull McMMOPlayer mmoPlayer) {
+        final HusbandryManager husbandry = mmoPlayer.getHusbandryManager();
+        if (husbandry == null) {
+            return;
+        }
+        final double radius = husbandry.getHerdRadius();
+        if (radius <= 0) {
+            return; // Not sounding — the overwhelmingly common case, and it must stay cheap.
+        }
+        if (!(player.level() instanceof ServerLevel level)) {
+            return;
+        }
+
+        final AABB searchBox = player.getBoundingBox().inflate(radius);
+        final List<Animal> herd =
+                level.getEntities(EntityTypeTest.forClass(Animal.class), searchBox, Animal::isAlive);
+        for (Animal animal : herd) {
+            final PathNavigation navigation = animal.getNavigation();
+            if (navigation.isDone()) {
+                navigation.moveTo(player, HERD_FOLLOW_SPEED);
+            }
+        }
+    }
+
+    /**
+     * How fast a called animal walks toward the herdsman, as a navigation speed multiplier.
+     *
+     * <p>Vanilla's own {@code TemptGoal} — the "follow the player holding wheat" behaviour this
+     * ability imitates — uses {@code 1.25} in most species, so the herd moves at the pace a player
+     * already recognises as "that animal wants what you are holding" rather than at an uncanny
+     * sprint.
+     */
+    private static final double HERD_FOLLOW_SPEED = 1.25;
 
     /**
      * Publish whether this player may currently walk on powder snow (Parkour → Snow Walker).
