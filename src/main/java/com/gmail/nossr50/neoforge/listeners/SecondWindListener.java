@@ -186,7 +186,8 @@ public final class SecondWindListener {
                 System.currentTimeMillis() + ((long) ticks * Misc.TIME_CONVERSION_FACTOR));
         mmoPlayer.setAbilityMode(SuperAbilityType.SECOND_WIND, true);
         McMMOMod.getScheduler().runLater(
-                new AbilityDisableTask(mmoPlayer, SuperAbilityType.SECOND_WIND), ticks);
+                new AbilityDisableTask(mmoPlayer, SuperAbilityType.SECOND_WIND),
+                (long) ticks * Misc.TICK_CONVERSION_FACTOR);
 
         switch (result.medium()) {
             case LAND -> dart(player, result);

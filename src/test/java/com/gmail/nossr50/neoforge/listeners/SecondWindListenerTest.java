@@ -1,9 +1,12 @@
 package com.gmail.nossr50.neoforge.listeners;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -15,10 +18,12 @@ import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.skills.SuperAbilityType;
 import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
+import com.gmail.nossr50.platform.scheduler.TickScheduler;
 import com.gmail.nossr50.skills.movement.Medium;
 import com.gmail.nossr50.skills.movement.MovementManager;
 import com.gmail.nossr50.skills.movement.SecondWindResult;
 import com.gmail.nossr50.util.McTestRegistries;
+import com.gmail.nossr50.util.Misc;
 import com.gmail.nossr50.util.player.UserManager;
 import java.nio.file.Path;
 import java.util.UUID;
@@ -83,6 +88,53 @@ class SecondWindListenerTest {
 
         verify(mmoPlayer).setAbilityMode(SuperAbilityType.SECOND_WIND, true);
         verify(mmoPlayer).setAbilityDATS(eq(SuperAbilityType.SECOND_WIND), anyLong());
+    }
+
+    /**
+     * Regression for the dropped {@code * Misc.TICK_CONVERSION_FACTOR} in {@code activate}: the
+     * scheduler's {@code runLater} delay must be scaled from seconds to ticks exactly like
+     * {@code setAbilityDATS}'s millisecond stamp two lines above it, not passed the raw
+     * {@code calculateAbilityActivationTicks} return value. Drives the real (static, JVM-shared)
+     * {@link McMMOMod#getScheduler()} rather than mocking it — {@code TickScheduler} is a
+     * concrete final class with no injection seam — and proves the timing by ticking it forward
+     * and watching the (mocked) player's own ability-mode flag actually flip.
+     */
+    @Test
+    void cleanActivationSchedulesTheDisableAtTheScaledTickDelayNotTheRawSecondsValue() {
+        final ServerPlayer player = trackedServerPlayer(Medium.WATER);
+        final boolean[] active = {false};
+        lenient().when(mmoPlayer.getAbilityMode(SuperAbilityType.SECOND_WIND))
+                .thenAnswer(invocation -> active[0]);
+        lenient().doAnswer(invocation -> {
+            active[0] = invocation.getArgument(1);
+            return null;
+        }).when(mmoPlayer).setAbilityMode(eq(SuperAbilityType.SECOND_WIND), anyBoolean());
+
+        // trackedServerPlayer stubs calculateAbilityActivationTicks(...) to 3 -- despite the
+        // method's name, that is SECONDS (see durationTicks()'s javadoc); the correctly-scaled
+        // AbilityDisableTask delay is 3 * Misc.TICK_CONVERSION_FACTOR = 60 real ticks. The bug
+        // scheduled it at the raw, un-scaled 3 ticks instead.
+        final int correctDelayTicks = 3 * Misc.TICK_CONVERSION_FACTOR;
+
+        SecondWindListener.onUseItem(mainHandEvent(player, Items.FEATHER));
+        assertTrue(active[0], "activation must flip the ability on before the scheduler is even pumped");
+
+        final TickScheduler scheduler = McMMOMod.getScheduler();
+        try {
+            for (int i = 0; i < correctDelayTicks - 1; i++) {
+                scheduler.tick();
+            }
+            assertTrue(active[0],
+                    "must still be active one tick before the scaled duration elapses -- the "
+                            + "buggy unscaled delay (3 ticks) would already have disabled it by now");
+
+            scheduler.tick();
+            assertFalse(active[0], "must disable exactly at ticks * TICK_CONVERSION_FACTOR");
+        } finally {
+            // This drives the real, JVM-shared scheduler singleton (TickScheduler has no test
+            // injection seam) -- leave it clean for whatever test runs next in this fork.
+            scheduler.cancelAll();
+        }
     }
 
     @Test
