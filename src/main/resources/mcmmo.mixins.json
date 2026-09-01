@@ -7,6 +7,7 @@
     "AbstractFurnaceGetBurnDurationMixin",
     "AbstractFurnaceSmeltMixin",
     "AbstractHorseChildAttributesMixin",
+    "AbstractHorseTameMixin",
     "AgeableMobGrowthMixin",
     "AnimalSetInLoveMixin",
     "ArmadilloBrushMixin",
@@ -28,6 +29,7 @@
     "PlayerInteractionStashMixin",
     "ResultSlotMixin",
     "ShearsItemInteractMixin",
+    "TameableAnimalTameMixin",
     "ThrownEggHatchMixin",
     "TntExplodeMixin"
   ],
