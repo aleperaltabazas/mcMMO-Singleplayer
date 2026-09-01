@@ -20,6 +20,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * {@code TamableAnimal}, so it has no inherited {@code tame(Player)} at all — the player-facing
  * bond method here is {@code tameWithName}, confirmed as the only tame-shaped method {@code javap}
  * lists on this class.
+ *
+ * <p><b>{@code TAIL}, not {@code RETURN} with a return-value check:</b> Fabric's equivalent
+ * ({@code AbstractHorseBondMixin}) injected at {@code RETURN} and only awarded XP when
+ * {@code cir.getReturnValue()} was {@code true}, to avoid crediting a failed bond attempt. That
+ * guard is dead weight on 1.21.1: {@code tameWithName}'s real 1.21.1 body (read from the extracted
+ * sources) unconditionally sets the owner/tamed flags and returns {@code true} — it has no internal
+ * failure path. The one caller that exists, {@code RunAroundLikeCrazyGoal#tick}, already gates the
+ * call behind its own temper-roll RNG check before invoking {@code tameWithName} at all, so by the
+ * time this injector fires the tame has already succeeded.
  */
 @Mixin(AbstractHorse.class)
 public abstract class AbstractHorseTameMixin {
