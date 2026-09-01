@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -26,6 +27,7 @@ import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.entity.EntityTypeTest;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -98,12 +100,10 @@ import org.jetbrains.annotations.Nullable;
  * PlayerSessionListener#onQuit} — this keeps the two files decoupled exactly as the two separate Fabric
  * registrations did, and NeoForge allows any number of independent listeners on one event type.
  *
- * <p>Two call sites present in the Fabric original are omitted on this branch (see the omission
- * comments at each former call site below for why): {@code PetFollowTeleport.onPlayerMoved} and
- * {@code PetCombatSweep.tick} (Taming pet following/aggression — not ported). Because those two pet
- * call sites are gone, {@code LAST_WORLDS} and the {@code sameWorld} computation that fed it — which
- * the Fabric original's own javadoc says only {@code PetFollowTeleport} ever read — are dead weight
- * here and have been dropped.
+ * <p>Taming's {@link PetFollowTeleport#onPlayerMoved} and {@link PetCombatSweep#tick} both ride this
+ * sweep too, same shape as {@code applyIronSkin} and {@code applyHerdsmansCall}: sitting above the
+ * missing-profile return below, because pet-follow-through-a-teleport and the engage-range reach fix
+ * are vanilla navigation overrides, not mcMMO mechanics gated on profile data.
  *
  * <p><b>Husbandry's Herdsman's Call</b> ({@link #applyHerdsmansCall}) rides this sweep too, ported
  * from Fabric's {@code callTheHerd} — found, on a full-tree search, inside Fabric's own {@code
@@ -150,6 +150,14 @@ public final class PlayerMovementTracker {
 
     /** Last tick's position per player. Not a session field, so it can be reset independently. */
     private static final Map<UUID, Vec3> LAST_POSITIONS = new HashMap<>();
+
+    /**
+     * Last tick's dimension per player, read only by {@link PetFollowTeleport#onPlayerMoved} (via the
+     * {@code sameWorld} flag computed in {@link #tickPlayer}) so a dimension change is never billed as
+     * an in-world teleport. Keyed by {@link ResourceKey} rather than by the {@link ServerLevel} object
+     * so nothing here keeps a whole level alive past its own lifecycle.
+     */
+    private static final Map<UUID, ResourceKey<Level>> LAST_WORLDS = new HashMap<>();
 
     /** Ticks since each player's last Solar Wings repair, so the trickle is rate-limited. */
     private static final Map<UUID, Integer> SOLAR_WINGS_TICKS = new HashMap<>();
@@ -211,6 +219,7 @@ public final class PlayerMovementTracker {
     /** Drop all per-player movement state (server stop). */
     public static void clear() {
         LAST_POSITIONS.clear();
+        LAST_WORLDS.clear();
         SOLAR_WINGS_TICKS.clear();
         SNOW_WALKERS.clear();
     }
@@ -220,6 +229,7 @@ public final class PlayerMovementTracker {
             return; // client-side event firing: ignore.
         }
         LAST_POSITIONS.remove(player.getUUID());
+        LAST_WORLDS.remove(player.getUUID());
         SOLAR_WINGS_TICKS.remove(player.getUUID());
         SNOW_WALKERS.remove(player.getUUID());
         // Phase 2 Task A: EntityDamageListener is now ported on this branch, so clean up its
@@ -256,17 +266,24 @@ public final class PlayerMovementTracker {
         final UUID uuid = player.getUUID();
         final Vec3 current = player.position();
         final Vec3 previous = LAST_POSITIONS.put(uuid, current);
+        final ResourceKey<Level> currentWorld = player.level().dimension();
+        final ResourceKey<Level> previousWorld = LAST_WORLDS.put(uuid, currentWorld);
+        final boolean sameWorld = previousWorld != null && previousWorld.equals(currentWorld);
 
-        // OMISSION: the Fabric original called PetFollowTeleport.onPlayerMoved(player, previous,
-        // current, sameWorld) here, ABOVE the missing-profile return below — deliberately, since pet
-        // following is a vanilla navigation override, not level-gated and not an mcMMO mechanic, so it
-        // had to keep working during a fresh join or a failed profile load. Taming pet-follow-through-
-        // portals is not ported on this branch (PetFollowTeleport does not exist here), so there is no
-        // call to place.
+        // ⚠️ TAMING'S PET FOLLOW SITS ABOVE THE MISSING-PROFILE RETURN BELOW, AND THAT IS THE WHOLE
+        // POINT OF IT BEING HERE. It is not level-gated, not per-profile and not an mcMMO mechanic at
+        // all — it is a vanilla override — so making it wait on a loaded profile would mean pets
+        // silently stop following during exactly the window (a fresh join, a failed load) where a
+        // player is most likely to be teleporting. It takes no McMMOPlayer for the same reason.
+        PetFollowTeleport.onPlayerMoved(player, previous, current, sameWorld);
 
-        // OMISSION: the Fabric original also called PetCombatSweep.tick(player) here, for the same
-        // "sits above the missing-profile return" reason. Taming pet aggression/pathing sweep is not
-        // ported on this branch (PetCombatSweep does not exist here).
+        // ⚠️ THE PET COMBAT SWEEP SITS ABOVE THE MISSING-PROFILE RETURN FOR THE SAME REASON PET
+        // FOLLOW DOES, and half of it would be wrong below the line. Its reach half is a vanilla
+        // PATHING override — it is what makes a pet able to walk to the mob you shot at bow range —
+        // and it applies in both stances, so it is not an mcMMO mechanic gated on mcMMO data. Only
+        // the aggressive-acquisition half needs a profile, and it resolves one itself and fails
+        // closed to PASSIVE rather than depend on this method's own guard below.
+        PetCombatSweep.tick(player);
 
         final McMMOPlayer mmoPlayer = UserManager.getPlayer(uuid);
         if (mmoPlayer == null) {
