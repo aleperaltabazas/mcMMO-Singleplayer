@@ -25,7 +25,9 @@ import com.gmail.nossr50.neoforge.listeners.HusbandryListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.RepairSalvageListener;
+import com.gmail.nossr50.neoforge.listeners.SecondWindListener;
 import com.gmail.nossr50.neoforge.listeners.SmeltingListener;
+import com.gmail.nossr50.neoforge.listeners.SmokeBombListener;
 import com.gmail.nossr50.neoforge.listeners.SuperAbilityListener;
 import com.gmail.nossr50.platform.MetadataStore;
 import com.gmail.nossr50.platform.scheduler.TickScheduler;
@@ -252,6 +254,13 @@ public final class McMMOMod {
         // and the super ability -- despite all three of its effects being wired elsewhere -- can
         // never actually turn on.
         HerdsmansCallListener.register();
+
+        // 2026-09-01-supertrigger-food-listener-plan, Task A: Second Wind and Smoke Bomb's
+        // activation triggers -- the same gap Herdsman's Call had (fix 06d4b7d34), except neither
+        // of these two had ANY of their ability logic ported yet, so these listeners carry the
+        // full effect bodies rather than a thin gate over an already-ported manager.
+        SecondWindListener.register();
+        SmokeBombListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
