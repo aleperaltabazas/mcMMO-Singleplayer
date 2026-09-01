@@ -11,8 +11,10 @@ import static org.mockito.Mockito.when;
 import com.gmail.nossr50.config.GeneralConfig;
 import com.gmail.nossr50.datatypes.player.McMMOPlayer;
 import com.gmail.nossr50.datatypes.skills.subskills.taming.PetCombatMode;
+import com.gmail.nossr50.locale.LocaleLoader;
 import com.gmail.nossr50.neoforge.McMMOMod;
 import com.gmail.nossr50.platform.PlatformPlayer;
+import com.gmail.nossr50.platform.text.TextUtils;
 import com.gmail.nossr50.skills.taming.TamingManager;
 import com.gmail.nossr50.util.McTestRegistries;
 import com.gmail.nossr50.util.player.UserManager;
@@ -35,6 +37,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
+import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 
 /**
@@ -135,14 +138,38 @@ class PetCombatModeListenerTest {
     }
 
     /**
-     * A click that arrives before the profile has loaded still consumes.
+     * A resolved profile with no {@link TamingManager} is a wiring bug, not a game state — but the
+     * click is already claimed on the client, so the listener must still cancel with
+     * {@code CONSUME} rather than desyncing the sit. Pins the warn-log-and-cancel branch at
+     * {@code PetCombatModeListener#onEntityInteract}, distinct from the pending-profile-load branch
+     * above (a tracked {@link McMMOPlayer} whose {@code getTamingManager()} answers {@code null}).
+     */
+    @Test
+    void aMissingTamingManagerStillConsumesTheClick() {
+        final ServerPlayer player = trackedServerPlayerWithNoTamingManager(new ItemStack(Items.BONE));
+
+        final PlayerInteractEvent.EntityInteract event = gestureEvent(player, ownedWolf(player));
+        PetCombatModeListener.onEntityInteract(event);
+
+        assertEquals(true, event.isCanceled(),
+                "a wiring bug (no TamingManager) must not desync the sit — the click is already "
+                        + "claimed on the client");
+        assertEquals(InteractionResult.CONSUME, event.getCancellationResult());
+    }
+
+    /**
+     * A click that arrives before the profile has loaded still consumes, and tells the player why —
+     * the profile-pending message, sent straight to the entity rather than through
+     * {@link com.gmail.nossr50.util.player.NotificationManager} (see the listener's own class doc:
+     * every one of that class's methods no-ops on a null {@code McMMOPlayer}, which is exactly the
+     * state here).
      *
      * <p>The client has already suppressed its sit prediction by the time this runs, so leaving the
      * event un-cancelled here makes the two sides disagree about whose click it was and sits the pet
      * on a gesture that was claimed. That mid-decision fall-through is exactly the repair-anvil bug.
      */
     @Test
-    void anUnloadedProfileStillConsumesTheClick() {
+    void anUnloadedProfileStillConsumesTheClickAndSendsThePendingLoadMessage() {
         // Deliberately NOT tracked in UserManager: this is the mid-join state.
         final ServerPlayer player = mock(ServerPlayer.class);
         lenient().when(player.getUUID()).thenReturn(UUID.randomUUID());
@@ -156,6 +183,14 @@ class PetCombatModeListenerTest {
         assertEquals(true, event.isCanceled(),
                 "handing the click back mid-decision sits the pet on a gesture already claimed");
         assertEquals(InteractionResult.CONSUME, event.getCancellationResult());
+
+        final ArgumentCaptor<Component> sent = ArgumentCaptor.forClass(Component.class);
+        verify(player).sendSystemMessage(sent.capture());
+        final String expectedText =
+                TextUtils.toText(LocaleLoader.getString("Profile.PendingLoad")).getString();
+        assertEquals(expectedText, sent.getValue().getString(),
+                "the player must be told their profile has not loaded, not left guessing why the "
+                        + "toggle silently did nothing");
     }
 
     // --- the boundary of the claim --------------------------------------------------------------
@@ -358,6 +393,26 @@ class PetCombatModeListenerTest {
         mmoPlayer = mock(McMMOPlayer.class);
         lenient().when(mmoPlayer.getPlayer()).thenReturn(new PlatformPlayer(player));
         lenient().when(mmoPlayer.getTamingManager()).thenReturn(tamingManager);
+        UserManager.track(mmoPlayer);
+        return player;
+    }
+
+    /**
+     * A tracked profile whose {@link McMMOPlayer#getTamingManager()} answers {@code null} — the
+     * resolved-but-unwired state {@link #aMissingTamingManagerStillConsumesTheClick} exercises.
+     */
+    private ServerPlayer trackedServerPlayerWithNoTamingManager(ItemStack mainHand) {
+        final UUID uuid = UUID.randomUUID();
+
+        final ServerPlayer player = mock(ServerPlayer.class);
+        lenient().when(player.getUUID()).thenReturn(uuid);
+        lenient().when(player.getMainHandItem()).thenReturn(mainHand);
+        lenient().when(player.isShiftKeyDown()).thenReturn(true);
+        lenient().when(player.getName()).thenReturn(Component.literal("tester-no-taming"));
+
+        mmoPlayer = mock(McMMOPlayer.class);
+        lenient().when(mmoPlayer.getPlayer()).thenReturn(new PlatformPlayer(player));
+        lenient().when(mmoPlayer.getTamingManager()).thenReturn(null);
         UserManager.track(mmoPlayer);
         return player;
     }
