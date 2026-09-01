@@ -25,6 +25,7 @@ import com.gmail.nossr50.neoforge.listeners.HusbandryListener;
 import com.gmail.nossr50.neoforge.listeners.PetCombatModeListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
+import com.gmail.nossr50.neoforge.listeners.ProjectileListener;
 import com.gmail.nossr50.neoforge.listeners.RepairSalvageListener;
 import com.gmail.nossr50.neoforge.listeners.SecondWindListener;
 import com.gmail.nossr50.neoforge.listeners.SmeltingListener;
@@ -268,6 +269,10 @@ public final class McMMOMod {
         // onto NeoForge's PlayerInteractEvent.EntityInteract -- confirmed a direct event port, no
         // mixin fallback needed (see PetCombatModeListener's class doc).
         PetCombatModeListener.register();
+
+        // 2026-09-01-archery-listener-plan, Task B: Arrow Retrieval's death-drop half (the launch
+        // half rides ProjectileSpawnMixin automatically) plus the fired-from/bow-force XP stamps.
+        ProjectileListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
