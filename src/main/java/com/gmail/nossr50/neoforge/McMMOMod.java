@@ -22,6 +22,7 @@ import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
 import com.gmail.nossr50.neoforge.listeners.HerdsmansCallListener;
 import com.gmail.nossr50.neoforge.listeners.HunterListener;
 import com.gmail.nossr50.neoforge.listeners.HusbandryListener;
+import com.gmail.nossr50.neoforge.listeners.PetCombatModeListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
 import com.gmail.nossr50.neoforge.listeners.RepairSalvageListener;
@@ -261,6 +262,12 @@ public final class McMMOMod {
         // full effect bodies rather than a thin gate over an already-ported manager.
         SecondWindListener.register();
         SmokeBombListener.register();
+
+        // 2026-09-01-taming-listener-plan, Task B: the pet combat-mode stance toggle (sneak +
+        // configured item + right-click an owned tamed pet), ported off Fabric's UseEntityCallback
+        // onto NeoForge's PlayerInteractEvent.EntityInteract -- confirmed a direct event port, no
+        // mixin fallback needed (see PetCombatModeListener's class doc).
+        PetCombatModeListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's
