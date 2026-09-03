@@ -22,6 +22,7 @@ import com.gmail.nossr50.neoforge.listeners.EntityDamageListener;
 import com.gmail.nossr50.neoforge.listeners.HerdsmansCallListener;
 import com.gmail.nossr50.neoforge.listeners.HunterListener;
 import com.gmail.nossr50.neoforge.listeners.HusbandryListener;
+import com.gmail.nossr50.neoforge.listeners.MobOriginListener;
 import com.gmail.nossr50.neoforge.listeners.PetCombatModeListener;
 import com.gmail.nossr50.neoforge.listeners.PlayerMovementTracker;
 import com.gmail.nossr50.neoforge.listeners.PlayerSessionListener;
@@ -273,6 +274,15 @@ public final class McMMOMod {
         // 2026-09-01-archery-listener-plan, Task B: Arrow Retrieval's death-drop half (the launch
         // half rides ProjectileSpawnMixin automatically) plus the fired-from/bow-force XP stamps.
         ProjectileListener.register();
+
+        // 2026-09-03-mob-origin-tracking-plan, Task A: Hunter's D-HU1 anti-farm gate was dead code
+        // -- MobOrigins.stampOnSpawn/carryThroughConversion existed but nothing called them, so
+        // every mob read as NATURAL and spawner/breeder/summoned mobs silently counted toward
+        // mastery. This wires the spawner/trial-spawner half via a real NeoForge event; the
+        // egg/dispenser/portal, breeding, conversion, and /summon halves ride mixins instead (see
+        // EntityTypeSpawnOriginMixin, AnimalBreedChildOriginMixin, MobConversionOriginMixin,
+        // SummonCommandOriginMixin).
+        MobOriginListener.register();
 
         // Task 7: in-game commands (/mcmmo, /mcstats, /mcability, /mcrefresh, /addlevels, /addxp).
         // RegisterCommandsEvent is not an IModBusEvent -- it is fired on the game bus by vanilla's

@@ -51,6 +51,20 @@ import org.slf4j.LoggerFactory;
  * versions the stamp is split per origin, one injector at each real spawn site, and
  * {@link #stampOnSpawn(Entity, MobSpawnType)} is the entry they share.
  *
+ * <h2>NeoForge specifically: the spawner case needs no injector at all</h2>
+ * On this platform {@code BaseSpawner#serverTick} and {@code TrialSpawner#spawnMob} both route
+ * through {@code EventHooks.finalizeMobSpawnSpawner(Mob, ServerLevelAccessor, DifficultyInstance,
+ * MobSpawnType, SpawnGroupData, IOwnedSpawner, boolean)}, which fires a real, always-posted
+ * {@code net.neoforged.neoforge.event.entity.living.FinalizeSpawnEvent} carrying
+ * {@code getSpawnType()} — confirmed via {@code javap} against
+ * {@code build/moddev/artifacts/neoforge-21.1.248-merged.jar} as vanilla plumbing, not a mod-only
+ * utility. So {@code MobOriginListener} is a plain {@code @SubscribeEvent}-style listener, not a
+ * mixin, for {@code SPAWNER}/{@code TRIAL_SPAWNER} only. The trap analysis above is still exactly
+ * right for the egg/dispenser/portal, breeding, conversion, and {@code /summon} paths — none of
+ * those have an equivalent event on this platform, so each still gets its own mixin at its own real
+ * spawn site (see {@code EntityTypeSpawnOriginMixin}, {@code AnimalBreedChildOriginMixin},
+ * {@code MobConversionOriginMixin}, {@code SummonCommandOriginMixin}).
+ *
  * <h2>Never write a qualifying origin</h2>
  * {@link #stampOnSpawn} returns without touching the entity when the reason maps to
  * {@link MobOrigin#NATURAL}. That is required, not tidy: some spawn reasons re-introduce a mob that
